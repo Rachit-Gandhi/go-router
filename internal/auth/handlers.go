@@ -11,7 +11,7 @@ type AuthHandler struct {
 	Db *database.Queries
 }
 
-func (cfg *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	var newUser requestNewUser
 	decoder := json.NewDecoder(r.Body)
 	defer r.Body.Close()
@@ -35,7 +35,7 @@ func (cfg *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 		Email:    newUser.Email,
 		Password: hashedPassword,
 	}
-	_, err = cfg.Db.CreateUser(r.Context(), user)
+	_, err = h.Db.CreateUser(r.Context(), user)
 	if err != nil {
 		http.Error(w, "Failed to create user", http.StatusInternalServerError)
 		return
