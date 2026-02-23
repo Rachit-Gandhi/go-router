@@ -8,6 +8,8 @@ import (
 	"os"
 	"strconv"
 
+	_ "github.com/lib/pq"
+
 	"github.com/Rachit-Gandhi/go-router/internal/auth"
 	"github.com/Rachit-Gandhi/go-router/internal/config"
 	"github.com/Rachit-Gandhi/go-router/internal/database"
@@ -30,15 +32,15 @@ func main() {
 		log.Fatal("Error converting CONTROL_PORT to int")
 	}
 	cfg := config.ControlConfig{
-		Config: config.Config{Host: os.Getenv("CONTROL_HOST"), Port: port, Db: dbConnection},
+		Config: config.Config{Host: os.Getenv("CONTROL_HOST"), Port: port},
 	}
-	server := &auth.ControlServer{ControlConfig: &cfg}
 	controlmux := http.NewServeMux()
+	authHandle := auth.AuthHandler{Db: dbConnection}
 	control := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 		Handler: controlmux,
 	}
-	controlmux.HandleFunc("POST /users", server.SignupHandler)
+	controlmux.HandleFunc("POST /users", authHandle.SignupHandler)
 	fmt.Printf("Server starting on %s:%d\n", cfg.Host, cfg.Port)
 	log.Fatal(control.ListenAndServe())
 }
