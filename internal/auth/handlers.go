@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 
@@ -36,13 +35,11 @@ func (cfg *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 		Email:    newUser.Email,
 		Password: hashedPassword,
 	}
-	_, err = cfg.Db.CreateUser(context.Background(), user)
+	_, err = cfg.Db.CreateUser(r.Context(), user)
 	if err != nil {
 		http.Error(w, "Failed to create user", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
 
 	newCreatedUser := createdNewUser{
 		Message:  "User created successfully",
@@ -54,5 +51,7 @@ func (cfg *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to marshal user data", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	w.Write(data)
 }
