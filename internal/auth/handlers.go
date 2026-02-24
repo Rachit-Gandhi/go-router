@@ -3,13 +3,10 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/Rachit-Gandhi/go-router/internal/database"
 )
-
-type AuthHandler struct {
-	Db *database.Queries
-}
 
 func (h *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	var newUser requestNewUser
@@ -85,6 +82,18 @@ func (h *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid password", http.StatusUnauthorized)
 		return
 	}
+	token, err := h.makeToken(user.UserID.String())
+	if err != nil {
+		http.Error(w, "Failed to make token", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "token",
+		Value:    token,
+		Expires:  time.Now().Add(time.Duration(h.TokenExpiry) * time.Hour),
+		HttpOnly: true,
+		Secure:   true,
+	})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Login successful"))
