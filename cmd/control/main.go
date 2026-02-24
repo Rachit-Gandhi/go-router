@@ -41,6 +41,7 @@ func main() {
 		Handler: controlmux,
 	}
 	controlmux.HandleFunc("POST /users", authHandle.SignupHandler)
+	controlmux.HandleFunc("POST /login", authHandle.LoginHandler)
 	fmt.Printf("Server starting on %s:%d\n", cfg.Host, cfg.Port)
 	log.Fatal(control.ListenAndServe())
 }

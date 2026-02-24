@@ -16,3 +16,13 @@ func validateSignupInput(username, email, password string) error {
 	}
 	return nil
 }
+
+func validateLoginInput(email, password string) error {
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+	if password == "" {
+		return fmt.Errorf("password is required")
+	}
+	return nil
+}

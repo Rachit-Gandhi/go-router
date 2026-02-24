@@ -16,6 +16,12 @@ func main() {
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
+	//dbURL := os.Getenv("DB_CONNECTION_URL")
+	/*db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatalf("error connecting to db: %v", err)
+	}*/
+	//dbConnection := database.New(db)
 	port, err := strconv.Atoi(os.Getenv("ROUTER_PORT"))
 	if err != nil {
 		log.Fatal("Error converting ROUTER_PORT to int")

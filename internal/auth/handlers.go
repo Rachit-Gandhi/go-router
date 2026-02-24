@@ -55,3 +55,37 @@ func (h *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	w.Write(data)
 }
+
+func (h *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
+	var loginUser requestLoginUser
+	decoder := json.NewDecoder(r.Body)
+	defer r.Body.Close()
+	err := decoder.Decode(&loginUser)
+	if err != nil {
+		http.Error(w, "Failed to decode request body", http.StatusBadRequest)
+		return
+	}
+	err = validateLoginInput(loginUser.Email, loginUser.Password)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	user, err := h.Db.GetUserByEmail(r.Context(), loginUser.Email)
+	if err != nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	valid, err := verifyPassword(loginUser.Password, user.Password)
+	if err != nil {
+		http.Error(w, "Failed to verify password", http.StatusInternalServerError)
+		return
+	}
+	if !valid {
+		http.Error(w, "Invalid password", http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Login successful"))
+}
