@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Rachit-Gandhi/go-router/internal/database"
+	"github.com/google/uuid"
 )
 
 func (h *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
@@ -20,6 +21,11 @@ func (h *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	err = validateSignupInput(newUser.Username, newUser.Email, newUser.Password)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	prexistingUser, err := h.Db.GetUserByEmail(r.Context(), newUser.Email)
+	if prexistingUser.UserID != uuid.Nil {
+		http.Error(w, "User already exists", http.StatusBadRequest)
 		return
 	}
 	hashedPassword, err := hashPassword(newUser.Password)
