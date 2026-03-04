@@ -46,7 +46,7 @@ func main() {
 	controlmux.HandleFunc("POST /login", authHandle.LoginHandler)
 	controlmux.HandleFunc("GET /api-keys", apiKeysHandle.GetApiKeysHandler)
 	controlmux.HandleFunc("POST /api-keys", apiKeysHandle.CreateApiKeyHandler)
-	//controlmux.HandleFunc("PUT /api-keys/{id}", apiKeysHandle.UpdateApiKeyHandler)
+	//controlmux.HandleFunc("PATCH /api-keys/{id}", apiKeysHandle.UpdateApiKeyHandler)
 	//controlmux.HandleFunc("DELETE /api-keys/{id}", apiKeysHandle.DeleteApiKeyHandler)
 	fmt.Printf("Server starting on %s:%d\n", cfg.Host, cfg.Port)
 	log.Fatal(control.ListenAndServe())
