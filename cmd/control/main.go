@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/lib/pq"
 
+	"github.com/Rachit-Gandhi/go-router/internal/apikeys"
 	"github.com/Rachit-Gandhi/go-router/internal/auth"
 	"github.com/Rachit-Gandhi/go-router/internal/config"
 	"github.com/Rachit-Gandhi/go-router/internal/database"
@@ -36,12 +37,17 @@ func main() {
 	}
 	controlmux := http.NewServeMux()
 	authHandle := auth.AuthHandler{Db: dbConnection}
+	apiKeysHandle := apikeys.ApiKeysHandler{Db: dbConnection}
 	control := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 		Handler: controlmux,
 	}
 	controlmux.HandleFunc("POST /users", authHandle.SignupHandler)
 	controlmux.HandleFunc("POST /login", authHandle.LoginHandler)
+	controlmux.HandleFunc("GET /api-keys", apiKeysHandle.GetApiKeysHandler)
+	controlmux.HandleFunc("POST /api-keys", apiKeysHandle.CreateApiKeyHandler)
+	//controlmux.HandleFunc("PUT /api-keys/{id}", apiKeysHandle.UpdateApiKeyHandler)
+	//controlmux.HandleFunc("DELETE /api-keys/{id}", apiKeysHandle.DeleteApiKeyHandler)
 	fmt.Printf("Server starting on %s:%d\n", cfg.Host, cfg.Port)
 	log.Fatal(control.ListenAndServe())
 }

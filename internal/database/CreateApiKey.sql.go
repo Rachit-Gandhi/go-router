@@ -12,23 +12,30 @@ import (
 )
 
 const createApiKey = `-- name: CreateApiKey :one
-INSERT INTO api_keys (user_id,name,key_hash)
+INSERT INTO api_keys (user_id,name,key_hash,api_key_show_string)
 VALUES(
     $1,
     $2,
-    $3
+    $3,
+    $4
 )
-RETURNING id, user_id, name, key_hash, disabled, deleted, last_used_at, disabled_at, deleted_at
+RETURNING id, user_id, name, key_hash, disabled, deleted, last_used_at, disabled_at, deleted_at, api_key_show_string
 `
 
 type CreateApiKeyParams struct {
-	UserID  uuid.UUID
-	Name    string
-	KeyHash string
+	UserID           uuid.UUID
+	Name             string
+	KeyHash          string
+	ApiKeyShowString string
 }
 
 func (q *Queries) CreateApiKey(ctx context.Context, arg CreateApiKeyParams) (ApiKey, error) {
-	row := q.db.QueryRowContext(ctx, createApiKey, arg.UserID, arg.Name, arg.KeyHash)
+	row := q.db.QueryRowContext(ctx, createApiKey,
+		arg.UserID,
+		arg.Name,
+		arg.KeyHash,
+		arg.ApiKeyShowString,
+	)
 	var i ApiKey
 	err := row.Scan(
 		&i.ID,
@@ -40,6 +47,7 @@ func (q *Queries) CreateApiKey(ctx context.Context, arg CreateApiKeyParams) (Api
 		&i.LastUsedAt,
 		&i.DisabledAt,
 		&i.DeletedAt,
+		&i.ApiKeyShowString,
 	)
 	return i, err
 }

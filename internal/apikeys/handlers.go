@@ -19,7 +19,7 @@ func (h *ApiKeysHandler) CreateApiKeyHandler(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Failed to decode request body", http.StatusBadRequest)
 		return
 	}
-	apiKey := CreateApiKey()
+	apiKey, apiKeyShowString := CreateApiKey()
 	apiKeyHash, err := CreateApiKeyHash(apiKey)
 	if err != nil {
 		http.Error(w, "Failed to create api key hash", http.StatusInternalServerError)
@@ -27,9 +27,10 @@ func (h *ApiKeysHandler) CreateApiKeyHandler(w http.ResponseWriter, r *http.Requ
 	}
 	userId := r.Context().Value("userId").(string)
 	requestNewApiKey := database.CreateApiKeyParams{
-		Name:    newApiRequest.Name,
-		KeyHash: apiKeyHash,
-		UserID:  uuid.MustParse(userId),
+		Name:             newApiRequest.Name,
+		KeyHash:          apiKeyHash,
+		UserID:           uuid.MustParse(userId),
+		ApiKeyShowString: apiKeyShowString,
 	}
 	newCreatedApiKey, err := h.Db.CreateApiKey(r.Context(), requestNewApiKey)
 	if err != nil {
@@ -41,4 +42,14 @@ func (h *ApiKeysHandler) CreateApiKeyHandler(w http.ResponseWriter, r *http.Requ
 		ApiKeyHash: newCreatedApiKey.KeyHash,
 	}
 	json.NewEncoder(w).Encode(returnedNewApiKey)
+}
+
+func (h *ApiKeysHandler) GetApiKeysHandler(w http.ResponseWriter, r *http.Request) {
+	userId := r.Context().Value("userId").(string)
+	apiKeys, err := h.Db.GetApiKeys(r.Context(), uuid.MustParse(userId))
+	if err != nil {
+		http.Error(w, "Failed to get api keys", http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(apiKeys)
 }

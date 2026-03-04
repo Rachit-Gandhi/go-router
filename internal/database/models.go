@@ -12,15 +12,16 @@ import (
 )
 
 type ApiKey struct {
-	ID         uuid.UUID
-	UserID     uuid.UUID
-	Name       string
-	KeyHash    string
-	Disabled   bool
-	Deleted    bool
-	LastUsedAt sql.NullTime
-	DisabledAt sql.NullTime
-	DeletedAt  sql.NullTime
+	ID               uuid.UUID
+	UserID           uuid.UUID
+	Name             string
+	KeyHash          string
+	Disabled         bool
+	Deleted          bool
+	LastUsedAt       sql.NullTime
+	DisabledAt       sql.NullTime
+	DeletedAt        sql.NullTime
+	ApiKeyShowString string
 }
 
 type DeployedModel struct {

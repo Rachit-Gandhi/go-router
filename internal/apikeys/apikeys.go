@@ -2,6 +2,7 @@ package apikeys
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/alexedwards/argon2id"
 	"github.com/dchest/uniuri"
@@ -9,9 +10,10 @@ import (
 
 const apiKeyPrefix = "go-"
 
-func CreateApiKey() string {
+func CreateApiKey() (string, string) {
 	secureString := uniuri.NewLen(20)
-	return apiKeyPrefix + secureString
+	apiKeyShowString := apiKeyPrefix + secureString[:2] + strings.Repeat("*", 15) + secureString[len(secureString)-3:]
+	return apiKeyPrefix + secureString, apiKeyShowString
 }
 
 func CreateApiKeyHash(apiKey string) (string, error) {
