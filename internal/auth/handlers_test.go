@@ -2,7 +2,6 @@ package auth
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -76,8 +75,4 @@ func TestLoginHandler(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
 	}
-}
-
-func withUser(ctx context.Context, userID string) context.Context {
-	return context.WithValue(ctx, UserIDKey{}, userID)
 }
