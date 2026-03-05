@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Rachit-Gandhi/go-router/internal/database"
+	"github.com/Rachit-Gandhi/go-router/internal/response"
 	"github.com/google/uuid"
 )
 
@@ -15,22 +16,22 @@ func (h *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	err := decoder.Decode(&newUser)
 	if err != nil {
-		http.Error(w, "Failed to decode request body", http.StatusBadRequest)
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, "Failed to decode request body", err)
 		return
 	}
 	err = validateSignupInput(newUser.Username, newUser.Email, newUser.Password)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, err.Error(), err)
 		return
 	}
 	prexistingUser, err := h.Db.GetUserByEmail(r.Context(), newUser.Email)
 	if prexistingUser.UserID != uuid.Nil {
-		http.Error(w, "User already exists", http.StatusBadRequest)
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, "User already exists", nil)
 		return
 	}
 	hashedPassword, err := hashPassword(newUser.Password)
 	if err != nil {
-		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to hash password", err)
 		return
 	}
 	user := database.CreateUserParams{
@@ -40,7 +41,7 @@ func (h *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err = h.Db.CreateUser(r.Context(), user)
 	if err != nil {
-		http.Error(w, "Failed to create user", http.StatusInternalServerError)
+		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to create user", err)
 		return
 	}
 
@@ -49,14 +50,10 @@ func (h *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 		Username: user.Username,
 		Email:    user.Email,
 	}
-	data, err := json.Marshal(newCreatedUser)
-	if err != nil {
-		http.Error(w, "Failed to marshal user data", http.StatusInternalServerError)
+	if err := response.Wrap(w).WriteJSON(http.StatusCreated, newCreatedUser); err != nil {
+		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to marshal user data", err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	w.Write(data)
 }
 
 func (h *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
@@ -65,32 +62,32 @@ func (h *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	err := decoder.Decode(&loginUser)
 	if err != nil {
-		http.Error(w, "Failed to decode request body", http.StatusBadRequest)
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, "Failed to decode request body", err)
 		return
 	}
 	err = validateLoginInput(loginUser.Email, loginUser.Password)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, err.Error(), err)
 		return
 	}
 	user, err := h.Db.GetUserByEmail(r.Context(), loginUser.Email)
 	if err != nil {
-		http.Error(w, "User not found", http.StatusNotFound)
+		response.WriteError(response.Wrap(w), http.StatusNotFound, "User not found", err)
 		return
 	}
 
 	valid, err := verifyPassword(loginUser.Password, user.Password)
 	if err != nil {
-		http.Error(w, "Failed to verify password", http.StatusInternalServerError)
+		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to verify password", err)
 		return
 	}
 	if !valid {
-		http.Error(w, "Invalid password", http.StatusUnauthorized)
+		response.WriteError(response.Wrap(w), http.StatusUnauthorized, "Invalid password", nil)
 		return
 	}
 	token, err := h.makeToken(user.UserID.String())
 	if err != nil {
-		http.Error(w, "Failed to make token", http.StatusInternalServerError)
+		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to make token", err)
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -100,7 +97,5 @@ func (h *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Secure:   true,
 	})
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Login successful"))
+	_ = response.Wrap(w).WriteJSON(http.StatusOK, map[string]string{"message": "Login successful"})
 }

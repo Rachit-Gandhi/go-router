@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/Rachit-Gandhi/go-router/internal/database"
+	"github.com/Rachit-Gandhi/go-router/internal/response"
 	"github.com/google/uuid"
 )
 
@@ -16,13 +17,13 @@ func (h *ApiKeysHandler) CreateApiKeyHandler(w http.ResponseWriter, r *http.Requ
 	var newApiRequest requestNewApiKey
 	err := json.NewDecoder(r.Body).Decode(&newApiRequest)
 	if err != nil {
-		http.Error(w, "Failed to decode request body", http.StatusBadRequest)
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, "Failed to decode request body", err)
 		return
 	}
 	apiKey, apiKeyShowString := CreateApiKey()
 	apiKeyHash, err := CreateApiKeyHash(apiKey)
 	if err != nil {
-		http.Error(w, "Failed to create api key hash", http.StatusInternalServerError)
+		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to create api key hash", err)
 		return
 	}
 	userId := r.Context().Value("userId").(string)
@@ -34,22 +35,62 @@ func (h *ApiKeysHandler) CreateApiKeyHandler(w http.ResponseWriter, r *http.Requ
 	}
 	newCreatedApiKey, err := h.Db.CreateApiKey(r.Context(), requestNewApiKey)
 	if err != nil {
-		http.Error(w, "Failed to create api key", http.StatusInternalServerError)
+		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to create api key", err)
 		return
 	}
 	returnedNewApiKey := newApiKey{
 		ApiKeyName: newCreatedApiKey.Name,
 		ApiKeyHash: newCreatedApiKey.KeyHash,
 	}
-	json.NewEncoder(w).Encode(returnedNewApiKey)
+	_ = response.Wrap(w).WriteJSON(http.StatusCreated, returnedNewApiKey)
 }
 
 func (h *ApiKeysHandler) GetApiKeysHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.Context().Value("userId").(string)
 	apiKeys, err := h.Db.GetApiKeys(r.Context(), uuid.MustParse(userId))
 	if err != nil {
-		http.Error(w, "Failed to get api keys", http.StatusInternalServerError)
+		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to get api keys", err)
 		return
 	}
-	json.NewEncoder(w).Encode(apiKeys)
+	_ = response.Wrap(w).WriteJSON(http.StatusOK, apiKeys)
+}
+
+func (h *ApiKeysHandler) RevokeApiKeyHandler(w http.ResponseWriter, r *http.Request) {
+	var req apiKeyAction
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, "Failed to decode request body", err)
+		return
+	}
+	if req.ApiKeyID == "" {
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, "api_key_id is required", nil)
+		return
+	}
+	userId := r.Context().Value("userId").(string)
+	apiKeyID := uuid.MustParse(req.ApiKeyID)
+	updated, err := h.Db.RevokeApiKey(r.Context(), database.RevokeApiKeyParams{ID: apiKeyID, UserID: uuid.MustParse(userId)})
+	if err != nil {
+		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to revoke api key", err)
+		return
+	}
+	_ = response.Wrap(w).WriteJSON(http.StatusOK, updated)
+}
+
+func (h *ApiKeysHandler) DeleteApiKeyHandler(w http.ResponseWriter, r *http.Request) {
+	var req apiKeyAction
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, "Failed to decode request body", err)
+		return
+	}
+	if req.ApiKeyID == "" {
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, "api_key_id is required", nil)
+		return
+	}
+	userId := r.Context().Value("userId").(string)
+	apiKeyID := uuid.MustParse(req.ApiKeyID)
+	updated, err := h.Db.DeleteApiKey(r.Context(), database.DeleteApiKeyParams{ID: apiKeyID, UserID: uuid.MustParse(userId)})
+	if err != nil {
+		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to delete api key", err)
+		return
+	}
+	_ = response.Wrap(w).WriteJSON(http.StatusOK, updated)
 }
