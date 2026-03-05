@@ -1,6 +1,6 @@
 module github.com/Rachit-Gandhi/go-router
 
-go 1.25.6
+go 1.22
 
 require github.com/google/uuid v1.6.0
 
@@ -14,6 +14,6 @@ require (
 )
 
 require (
-	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/crypto v0.23.0 // indirect
+	golang.org/x/sys v0.20.0 // indirect
 )
