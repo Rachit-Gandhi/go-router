@@ -8,6 +8,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// UserIDKey is the context key for the authenticated user id.
+type UserIDKey struct{}
+
 // AuthMiddleware validates the auth token and injects userId into context.
 func (h *AuthHandler) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +38,7 @@ func (h *AuthHandler) AuthMiddleware(next http.Handler) http.Handler {
 			response.WriteError(response.Wrap(w), http.StatusUnauthorized, "Unauthorized", nil)
 			return
 		}
-		ctx := context.WithValue(r.Context(), "userId", userId)
+		ctx := context.WithValue(r.Context(), UserIDKey{}, userId)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

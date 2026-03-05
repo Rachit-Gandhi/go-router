@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/Rachit-Gandhi/go-router/internal/auth"
 	"github.com/Rachit-Gandhi/go-router/internal/database"
 	"github.com/Rachit-Gandhi/go-router/internal/response"
 	"github.com/google/uuid"
@@ -16,7 +17,7 @@ type ApiKeysHandler struct {
 
 // userIDFromContext extracts userId from context or returns unauthorized.
 func userIDFromContext(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	userIDRaw, ok := r.Context().Value("userId").(string)
+	userIDRaw, ok := r.Context().Value(auth.UserIDKey{}).(string)
 	if !ok || userIDRaw == "" {
 		response.WriteError(response.Wrap(w), http.StatusUnauthorized, "Unauthorized", nil)
 		return uuid.Nil, false

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Rachit-Gandhi/go-router/internal/auth"
 	"github.com/Rachit-Gandhi/go-router/internal/database"
 	"github.com/google/uuid"
 )
@@ -122,5 +123,5 @@ func TestDeleteApiKeyHandler(t *testing.T) {
 }
 
 func withUser(ctx context.Context, userID string) context.Context {
-	return context.WithValue(ctx, "userId", userID)
+	return context.WithValue(ctx, auth.UserIDKey{}, userID)
 }

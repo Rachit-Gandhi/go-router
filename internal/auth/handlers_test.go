@@ -79,5 +79,5 @@ func TestLoginHandler(t *testing.T) {
 }
 
 func withUser(ctx context.Context, userID string) context.Context {
-	return context.WithValue(ctx, "userId", userID)
+	return context.WithValue(ctx, UserIDKey{}, userID)
 }
