@@ -13,6 +13,20 @@ type ApiKeysHandler struct {
 	Db *database.Queries
 }
 
+func userIDFromContext(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	userIDRaw, ok := r.Context().Value("userId").(string)
+	if !ok || userIDRaw == "" {
+		response.WriteError(response.Wrap(w), http.StatusUnauthorized, "Unauthorized", nil)
+		return uuid.Nil, false
+	}
+	userUUID, err := uuid.Parse(userIDRaw)
+	if err != nil {
+		response.WriteError(response.Wrap(w), http.StatusUnauthorized, "Unauthorized", err)
+		return uuid.Nil, false
+	}
+	return userUUID, true
+}
+
 func (h *ApiKeysHandler) CreateApiKeyHandler(w http.ResponseWriter, r *http.Request) {
 	var newApiRequest requestNewApiKey
 	err := json.NewDecoder(r.Body).Decode(&newApiRequest)
@@ -26,11 +40,14 @@ func (h *ApiKeysHandler) CreateApiKeyHandler(w http.ResponseWriter, r *http.Requ
 		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to create api key hash", err)
 		return
 	}
-	userId := r.Context().Value("userId").(string)
+	userUUID, ok := userIDFromContext(w, r)
+	if !ok {
+		return
+	}
 	requestNewApiKey := database.CreateApiKeyParams{
 		Name:             newApiRequest.Name,
 		KeyHash:          apiKeyHash,
-		UserID:           uuid.MustParse(userId),
+		UserID:           userUUID,
 		ApiKeyShowString: apiKeyShowString,
 	}
 	newCreatedApiKey, err := h.Db.CreateApiKey(r.Context(), requestNewApiKey)
@@ -46,8 +63,11 @@ func (h *ApiKeysHandler) CreateApiKeyHandler(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *ApiKeysHandler) GetApiKeysHandler(w http.ResponseWriter, r *http.Request) {
-	userId := r.Context().Value("userId").(string)
-	apiKeys, err := h.Db.GetApiKeys(r.Context(), uuid.MustParse(userId))
+	userUUID, ok := userIDFromContext(w, r)
+	if !ok {
+		return
+	}
+	apiKeys, err := h.Db.GetApiKeys(r.Context(), userUUID)
 	if err != nil {
 		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to get api keys", err)
 		return
@@ -65,9 +85,16 @@ func (h *ApiKeysHandler) RevokeApiKeyHandler(w http.ResponseWriter, r *http.Requ
 		response.WriteError(response.Wrap(w), http.StatusBadRequest, "api_key_id is required", nil)
 		return
 	}
-	userId := r.Context().Value("userId").(string)
-	apiKeyID := uuid.MustParse(req.ApiKeyID)
-	updated, err := h.Db.RevokeApiKey(r.Context(), database.RevokeApiKeyParams{ID: apiKeyID, UserID: uuid.MustParse(userId)})
+	userUUID, ok := userIDFromContext(w, r)
+	if !ok {
+		return
+	}
+	apiKeyID, err := uuid.Parse(req.ApiKeyID)
+	if err != nil {
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, "Invalid api_key_id", err)
+		return
+	}
+	updated, err := h.Db.RevokeApiKey(r.Context(), database.RevokeApiKeyParams{ID: apiKeyID, UserID: userUUID})
 	if err != nil {
 		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to revoke api key", err)
 		return
@@ -85,9 +112,16 @@ func (h *ApiKeysHandler) DeleteApiKeyHandler(w http.ResponseWriter, r *http.Requ
 		response.WriteError(response.Wrap(w), http.StatusBadRequest, "api_key_id is required", nil)
 		return
 	}
-	userId := r.Context().Value("userId").(string)
-	apiKeyID := uuid.MustParse(req.ApiKeyID)
-	updated, err := h.Db.DeleteApiKey(r.Context(), database.DeleteApiKeyParams{ID: apiKeyID, UserID: uuid.MustParse(userId)})
+	userUUID, ok := userIDFromContext(w, r)
+	if !ok {
+		return
+	}
+	apiKeyID, err := uuid.Parse(req.ApiKeyID)
+	if err != nil {
+		response.WriteError(response.Wrap(w), http.StatusBadRequest, "Invalid api_key_id", err)
+		return
+	}
+	updated, err := h.Db.DeleteApiKey(r.Context(), database.DeleteApiKeyParams{ID: apiKeyID, UserID: userUUID})
 	if err != nil {
 		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to delete api key", err)
 		return

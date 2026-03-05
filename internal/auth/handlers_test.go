@@ -15,11 +15,17 @@ import (
 )
 
 func setupMockDB(t *testing.T) (*database.Queries, sqlmock.Sqlmock, func()) {
+	t.Helper()
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
-	return database.New(db), mock, func() { db.Close() }
+	return database.New(db), mock, func() {
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet sqlmock expectations: %v", err)
+		}
+		_ = db.Close()
+	}
 }
 
 func TestSignupHandler(t *testing.T) {

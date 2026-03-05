@@ -2,9 +2,9 @@ name: ci
 
 on:
   push:
-    branches: ["feat/authCrud", "feat/auth-crud-revoke-delete"]
+    branches: ["main", "feat/authCrud", "feat/*"]
   pull_request:
-    branches: ["feat/authCrud"]
+    branches: ["main", "feat/authCrud"]
 
 jobs:
   test:

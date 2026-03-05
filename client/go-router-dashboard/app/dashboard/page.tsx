@@ -24,8 +24,8 @@ export default function Dashboard() {
                 <div style={{ opacity: 0.7, fontSize: 12 }}>go-**{i}**</div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button>Revoke</button>
-                <button>Delete</button>
+                <button type="button">Revoke</button>
+                <button type="button">Delete</button>
               </div>
             </div>
           ))}

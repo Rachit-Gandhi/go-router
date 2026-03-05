@@ -15,7 +15,7 @@ const revokeApiKey = `-- name: RevokeApiKey :one
 UPDATE api_keys
 SET disabled = true,
     disabled_at = now()
-WHERE id = $1 AND user_id = $2 AND deleted = false
+WHERE id = $1 AND user_id = $2 AND deleted = false AND disabled = false
 RETURNING id, user_id, name, key_hash, disabled, deleted, last_used_at, disabled_at, deleted_at, api_key_show_string
 `
 

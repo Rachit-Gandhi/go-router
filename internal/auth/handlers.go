@@ -1,7 +1,9 @@
 package auth
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -25,7 +27,11 @@ func (h *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prexistingUser, err := h.Db.GetUserByEmail(r.Context(), newUser.Email)
-	if prexistingUser.UserID != uuid.Nil {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to check existing user", err)
+		return
+	}
+	if err == nil && prexistingUser.UserID != uuid.Nil {
 		response.WriteError(response.Wrap(w), http.StatusBadRequest, "User already exists", nil)
 		return
 	}
