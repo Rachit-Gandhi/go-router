@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// AuthMiddleware validates the auth token and injects userId into context.
 func (h *AuthHandler) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("Authorization")

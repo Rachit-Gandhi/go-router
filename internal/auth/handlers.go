@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// SignupHandler registers a new user.
 func (h *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	var newUser requestNewUser
 	decoder := json.NewDecoder(r.Body)
@@ -62,6 +63,7 @@ func (h *AuthHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// LoginHandler authenticates a user and sets a token cookie.
 func (h *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	var loginUser requestLoginUser
 	decoder := json.NewDecoder(r.Body)

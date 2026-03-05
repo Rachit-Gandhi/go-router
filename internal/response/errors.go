@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// ErrorResponse is a client-safe JSON error payload.
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	TraceID string `json:"trace_id"`
@@ -22,6 +23,7 @@ type StatusFile struct {
 	UpdatedAt     *string `json:"updated_at"`
 }
 
+// WriteError writes a standardized error response and logs details server-side.
 func WriteError(w JsonWriter, status int, msg string, detail error) {
 	trace := uuid.NewString()
 	resp := ErrorResponse{Error: msg, TraceID: trace}

@@ -9,10 +9,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// ApiKeysHandler handles API key CRUD endpoints.
 type ApiKeysHandler struct {
 	Db *database.Queries
 }
 
+// userIDFromContext extracts userId from context or returns unauthorized.
 func userIDFromContext(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	userIDRaw, ok := r.Context().Value("userId").(string)
 	if !ok || userIDRaw == "" {
@@ -27,6 +29,7 @@ func userIDFromContext(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool)
 	return userUUID, true
 }
 
+// CreateApiKeyHandler creates a new API key for the authenticated user.
 func (h *ApiKeysHandler) CreateApiKeyHandler(w http.ResponseWriter, r *http.Request) {
 	var newApiRequest requestNewApiKey
 	err := json.NewDecoder(r.Body).Decode(&newApiRequest)
@@ -62,6 +65,7 @@ func (h *ApiKeysHandler) CreateApiKeyHandler(w http.ResponseWriter, r *http.Requ
 	_ = response.Wrap(w).WriteJSON(http.StatusCreated, returnedNewApiKey)
 }
 
+// GetApiKeysHandler lists API keys for the authenticated user.
 func (h *ApiKeysHandler) GetApiKeysHandler(w http.ResponseWriter, r *http.Request) {
 	userUUID, ok := userIDFromContext(w, r)
 	if !ok {
@@ -75,6 +79,7 @@ func (h *ApiKeysHandler) GetApiKeysHandler(w http.ResponseWriter, r *http.Reques
 	_ = response.Wrap(w).WriteJSON(http.StatusOK, apiKeys)
 }
 
+// RevokeApiKeyHandler disables an API key (soft revoke).
 func (h *ApiKeysHandler) RevokeApiKeyHandler(w http.ResponseWriter, r *http.Request) {
 	var req apiKeyAction
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -102,6 +107,7 @@ func (h *ApiKeysHandler) RevokeApiKeyHandler(w http.ResponseWriter, r *http.Requ
 	_ = response.Wrap(w).WriteJSON(http.StatusOK, updated)
 }
 
+// DeleteApiKeyHandler soft-deletes an API key.
 func (h *ApiKeysHandler) DeleteApiKeyHandler(w http.ResponseWriter, r *http.Request) {
 	var req apiKeyAction
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

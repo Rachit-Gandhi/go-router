@@ -19,6 +19,7 @@ type requestLoginUser struct {
 	Password string `json:"password"`
 }
 
+// AuthHandler contains dependencies for auth endpoints.
 type AuthHandler struct {
 	Db          *database.Queries
 	JwtSecret   string
