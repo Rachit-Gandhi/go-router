@@ -13,7 +13,6 @@ import (
 	"github.com/Rachit-Gandhi/go-router/internal/apikeys"
 	"github.com/Rachit-Gandhi/go-router/internal/auth"
 	"github.com/Rachit-Gandhi/go-router/internal/config"
-	"github.com/Rachit-Gandhi/go-router/internal/credits"
 	"github.com/Rachit-Gandhi/go-router/internal/database"
 	"github.com/joho/godotenv"
 )
@@ -39,7 +38,6 @@ func main() {
 	controlmux := http.NewServeMux()
 	authHandle := auth.AuthHandler{Db: dbConnection}
 	apiKeysHandle := apikeys.ApiKeysHandler{Db: dbConnection}
-	creditsHandle := credits.CreditsHandler{Db: dbConnection, SQL: db}
 	control := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 		Handler: controlmux,
@@ -51,8 +49,6 @@ func main() {
 	controlmux.Handle("POST /api-keys", authHandle.AuthMiddleware(http.HandlerFunc(apiKeysHandle.CreateApiKeyHandler)))
 	controlmux.Handle("PATCH /api-keys/revoke", authHandle.AuthMiddleware(http.HandlerFunc(apiKeysHandle.RevokeApiKeyHandler)))
 	controlmux.Handle("DELETE /api-keys", authHandle.AuthMiddleware(http.HandlerFunc(apiKeysHandle.DeleteApiKeyHandler)))
-	controlmux.Handle("GET /credits", authHandle.AuthMiddleware(http.HandlerFunc(creditsHandle.GetBalanceHandler)))
-	controlmux.Handle("POST /credits/topup", authHandle.AuthMiddleware(http.HandlerFunc(creditsHandle.MockTopupHandler)))
 	fmt.Printf("Server starting on %s:%d\n", cfg.Host, cfg.Port)
 	log.Fatal(control.ListenAndServe())
 }
