@@ -72,9 +72,7 @@ func (h *CreditsHandler) MockTopupHandler(w http.ResponseWriter, r *http.Request
 		response.WriteError(response.Wrap(w), http.StatusInternalServerError, "Failed to start transaction", err)
 		return
 	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
+	defer tx.Rollback()
 
 	qtx := h.Db.WithTx(tx)
 	trx, err := qtx.CreateTransaction(r.Context(), database.CreateTransactionParams{
