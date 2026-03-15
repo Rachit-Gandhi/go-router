@@ -86,7 +86,7 @@ func NewHandlerWithPostgresFromEnv(now func() time.Time) (http.Handler, *sql.DB,
 		return nil, nil, fmt.Errorf("new session codec: %w", err)
 	}
 
-	magicLinkSender, err := newSMTPMagicLinkSenderFromEnv()
+	magicLinkSender, err := newMagicLinkSenderFromEnv()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -240,6 +240,7 @@ func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.R
 	ctx := r.Context()
 	var req struct {
 		Email string `json:"email"`
+		OrgID string `json:"org_id"`
 	}
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -247,6 +248,7 @@ func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.R
 	}
 
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	req.OrgID = strings.TrimSpace(req.OrgID)
 	if req.Email == "" {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
@@ -275,6 +277,20 @@ func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 	selectedMembership := memberships[0]
+	if req.OrgID != "" {
+		found := false
+		for i := range memberships {
+			if memberships[i].OrgID == req.OrgID {
+				selectedMembership = memberships[i]
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, http.StatusForbidden, "user is not a member of requested org")
+			return
+		}
+	}
 
 	now := h.now()
 	magicLinkID, err := randomID("ml")
@@ -341,11 +357,16 @@ func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"magic_link_id": magicLinkID,
 		"expires_at":    now.Add(magicLinkTTL).UTC().Format(time.RFC3339),
-		"delivery":      "smtp",
-	})
+		"delivery":      magicLinkDelivery(h.magicLinks),
+	}
+	if shouldExposeMagicLinkCode(h.magicLinks) {
+		response["code"] = code
+	}
+
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *controlHandler) handleMagicLinkExchange(w http.ResponseWriter, r *http.Request) {

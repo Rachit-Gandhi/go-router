@@ -71,31 +71,30 @@ func TestNewHandlerWithPostgresFromEnvRejectsInvalidInsecureCookiesFlag(t *testi
 	}
 }
 
-func TestNewHandlerWithPostgresFromEnvRequiresSMTPHost(t *testing.T) {
-	t.Setenv("CONTROL_DB_DSN", "postgres://invalid")
-	t.Setenv("CONTROL_SESSION_SECRET", "session-secret")
-	t.Setenv("CONTROL_PROVIDER_KEY_SECRET", "provider-secret")
+func TestNewMagicLinkSenderFromEnvDefaultsToFileDelivery(t *testing.T) {
 	t.Setenv("CONTROL_SMTP_HOST", "")
-	t.Setenv("CONTROL_SMTP_PORT", "587")
-	t.Setenv("CONTROL_SMTP_FROM", "no-reply@example.com")
+	t.Setenv("CONTROL_MAGIC_LINK_LOG_PATH", "")
 
-	h, db, err := NewHandlerWithPostgresFromEnv(time.Now)
-	if err == nil || !strings.Contains(err.Error(), "CONTROL_SMTP_HOST is required") {
-		t.Fatalf("expected CONTROL_SMTP_HOST required error, got handler=%v db=%v err=%v", h, db, err)
+	sender, err := newMagicLinkSenderFromEnv()
+	if err != nil {
+		t.Fatalf("newMagicLinkSenderFromEnv error: %v", err)
+	}
+	if got := magicLinkDelivery(sender); got != "file" {
+		t.Fatalf("expected file delivery mode, got %q", got)
+	}
+	if !shouldExposeMagicLinkCode(sender) {
+		t.Fatalf("expected file sender to expose debug code")
 	}
 }
 
-func TestNewHandlerWithPostgresFromEnvRejectsInvalidSMTPPort(t *testing.T) {
-	t.Setenv("CONTROL_DB_DSN", "postgres://invalid")
-	t.Setenv("CONTROL_SESSION_SECRET", "session-secret")
-	t.Setenv("CONTROL_PROVIDER_KEY_SECRET", "provider-secret")
+func TestNewMagicLinkSenderFromEnvRejectsInvalidSMTPPort(t *testing.T) {
 	t.Setenv("CONTROL_SMTP_HOST", "smtp.example.com")
 	t.Setenv("CONTROL_SMTP_PORT", "abc")
 	t.Setenv("CONTROL_SMTP_FROM", "no-reply@example.com")
 
-	h, db, err := NewHandlerWithPostgresFromEnv(time.Now)
+	sender, err := newMagicLinkSenderFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "CONTROL_SMTP_PORT must be a positive integer") {
-		t.Fatalf("expected invalid smtp port error, got handler=%v db=%v err=%v", h, db, err)
+		t.Fatalf("expected invalid smtp port error, got sender=%v err=%v", sender, err)
 	}
 }
 
