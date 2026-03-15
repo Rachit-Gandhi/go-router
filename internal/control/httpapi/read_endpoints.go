@@ -652,20 +652,40 @@ func (h *controlHandler) handleUsageSummary(w http.ResponseWriter, r *http.Reque
 
 	const usageSummarySQL = `
 SELECT
-	COUNT(*)::BIGINT,
-	COALESCE(SUM(request_tokens), 0)::BIGINT,
-	COALESCE(SUM(response_tokens), 0)::BIGINT,
-	COALESCE(AVG(CASE WHEN status_code >= 400 THEN 1.0 ELSE 0.0 END), 0.0),
+	COUNT(*)::BIGINT AS request_count,
+	COALESCE(SUM(u.request_tokens), 0)::BIGINT AS request_tokens,
+	COALESCE(SUM(u.response_tokens), 0)::BIGINT AS response_tokens,
+	COALESCE(AVG(CASE WHEN u.status_code >= 400 THEN 1.0 ELSE 0.0 END), 0.0) AS error_rate,
 	COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY latency_ms), 0.0),
-	COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms), 0.0)
-FROM usage_logs
-WHERE org_id = $1
-  AND created_at >= $2
-  AND created_at < $3;
+	COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms), 0.0),
+	COALESCE(
+		SUM(
+			CASE
+				WHEN mp.id IS NULL THEN 0
+				ELSE
+					(u.request_tokens::DOUBLE PRECISION / 1000000.0) * mp.input_price_per_mtok +
+					(u.response_tokens::DOUBLE PRECISION / 1000000.0) * mp.output_price_per_mtok
+			END
+		),
+		0
+	)::DOUBLE PRECISION AS estimated_cost,
+	COUNT(*) FILTER (WHERE mp.id IS NOT NULL)::BIGINT AS priced_request_count,
+	COALESCE(MAX(mp.currency), 'USD')::TEXT AS estimated_cost_currency
+FROM usage_logs u
+LEFT JOIN model_pricing mp
+	ON mp.provider = u.provider
+	AND mp.model = u.model
+	AND u.created_at >= mp.effective_from
+	AND (mp.effective_to IS NULL OR u.created_at < mp.effective_to)
+WHERE u.org_id = $1
+  AND u.created_at >= $2
+  AND u.created_at < $3;
 `
 
 	var requestCount, requestTokens, responseTokens int64
-	var errorRate, p50, p95 float64
+	var pricedRequestCount int64
+	var errorRate, p50, p95, estimatedCost float64
+	var estimatedCostCurrency string
 	if err := h.db.QueryRowContext(ctx, usageSummarySQL, orgID, from, to).Scan(
 		&requestCount,
 		&requestTokens,
@@ -673,20 +693,28 @@ WHERE org_id = $1
 		&errorRate,
 		&p50,
 		&p95,
+		&estimatedCost,
+		&pricedRequestCount,
+		&estimatedCostCurrency,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load usage summary")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"from":            from.UTC().Format(time.RFC3339),
-		"to":              to.UTC().Format(time.RFC3339),
-		"request_count":   requestCount,
-		"request_tokens":  requestTokens,
-		"response_tokens": responseTokens,
-		"error_rate":      errorRate,
-		"latency_p50_ms":  p50,
-		"latency_p95_ms":  p95,
+		"from":                    from.UTC().Format(time.RFC3339),
+		"to":                      to.UTC().Format(time.RFC3339),
+		"request_count":           requestCount,
+		"request_tokens":          requestTokens,
+		"response_tokens":         responseTokens,
+		"error_rate":              errorRate,
+		"latency_p50_ms":          p50,
+		"latency_p95_ms":          p95,
+		"estimated_cost":          estimatedCost,
+		"estimated_cost_currency": estimatedCostCurrency,
+		"priced_request_count":    pricedRequestCount,
+		"unpriced_request_count":  requestCount - pricedRequestCount,
+		"cost_estimate":           true,
 	})
 }
 
@@ -718,15 +746,32 @@ func (h *controlHandler) handleUsageTimeSeries(w http.ResponseWriter, r *http.Re
 
 	query := fmt.Sprintf(`
 SELECT
-	date_trunc('%s', created_at) AS bucket_start,
-	COUNT(*)::BIGINT,
-	COALESCE(SUM(request_tokens), 0)::BIGINT,
-	COALESCE(SUM(response_tokens), 0)::BIGINT,
-	COALESCE(AVG(CASE WHEN status_code >= 400 THEN 1.0 ELSE 0.0 END), 0.0)
-FROM usage_logs
-WHERE org_id = $1
-  AND created_at >= $2
-  AND created_at < $3
+	date_trunc('%s', u.created_at) AS bucket_start,
+	COUNT(*)::BIGINT AS request_count,
+	COALESCE(SUM(u.request_tokens), 0)::BIGINT AS request_tokens,
+	COALESCE(SUM(u.response_tokens), 0)::BIGINT AS response_tokens,
+	COALESCE(AVG(CASE WHEN u.status_code >= 400 THEN 1.0 ELSE 0.0 END), 0.0) AS error_rate,
+	COALESCE(
+		SUM(
+			CASE
+				WHEN mp.id IS NULL THEN 0
+				ELSE
+					(u.request_tokens::DOUBLE PRECISION / 1000000.0) * mp.input_price_per_mtok +
+					(u.response_tokens::DOUBLE PRECISION / 1000000.0) * mp.output_price_per_mtok
+			END
+		),
+		0
+	)::DOUBLE PRECISION AS estimated_cost,
+	COUNT(*) FILTER (WHERE mp.id IS NOT NULL)::BIGINT AS priced_request_count
+FROM usage_logs u
+LEFT JOIN model_pricing mp
+	ON mp.provider = u.provider
+	AND mp.model = u.model
+	AND u.created_at >= mp.effective_from
+	AND (mp.effective_to IS NULL OR u.created_at < mp.effective_to)
+WHERE u.org_id = $1
+  AND u.created_at >= $2
+  AND u.created_at < $3
 GROUP BY 1
 ORDER BY 1 ASC;
 `, bucket)
@@ -741,18 +786,21 @@ ORDER BY 1 ASC;
 	items := make([]map[string]any, 0)
 	for rows.Next() {
 		var bucketStart time.Time
-		var requestCount, requestTokens, responseTokens int64
-		var errorRate float64
-		if err := rows.Scan(&bucketStart, &requestCount, &requestTokens, &responseTokens, &errorRate); err != nil {
+		var requestCount, requestTokens, responseTokens, pricedRequestCount int64
+		var errorRate, estimatedCost float64
+		if err := rows.Scan(&bucketStart, &requestCount, &requestTokens, &responseTokens, &errorRate, &estimatedCost, &pricedRequestCount); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to parse usage timeseries")
 			return
 		}
 		items = append(items, map[string]any{
-			"bucket_start":    bucketStart.UTC().Format(time.RFC3339),
-			"request_count":   requestCount,
-			"request_tokens":  requestTokens,
-			"response_tokens": responseTokens,
-			"error_rate":      errorRate,
+			"bucket_start":           bucketStart.UTC().Format(time.RFC3339),
+			"request_count":          requestCount,
+			"request_tokens":         requestTokens,
+			"response_tokens":        responseTokens,
+			"error_rate":             errorRate,
+			"estimated_cost":         estimatedCost,
+			"priced_request_count":   pricedRequestCount,
+			"unpriced_request_count": requestCount - pricedRequestCount,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -761,10 +809,12 @@ ORDER BY 1 ASC;
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"from":   from.UTC().Format(time.RFC3339),
-		"to":     to.UTC().Format(time.RFC3339),
-		"bucket": bucket,
-		"items":  items,
+		"from":                    from.UTC().Format(time.RFC3339),
+		"to":                      to.UTC().Format(time.RFC3339),
+		"bucket":                  bucket,
+		"estimated_cost_currency": "USD",
+		"cost_estimate":           true,
+		"items":                   items,
 	})
 }
 
@@ -787,16 +837,33 @@ func (h *controlHandler) handleUsageByTeam(w http.ResponseWriter, r *http.Reques
 
 	const usageByTeamSQL = `
 SELECT
-	team_id,
-	COUNT(*)::BIGINT,
-	COALESCE(SUM(request_tokens), 0)::BIGINT,
-	COALESCE(SUM(response_tokens), 0)::BIGINT,
-	COALESCE(AVG(CASE WHEN status_code >= 400 THEN 1.0 ELSE 0.0 END), 0.0)
-FROM usage_logs
-WHERE org_id = $1
-  AND created_at >= $2
-  AND created_at < $3
-GROUP BY team_id
+	u.team_id,
+	COUNT(*)::BIGINT AS request_count,
+	COALESCE(SUM(u.request_tokens), 0)::BIGINT AS request_tokens,
+	COALESCE(SUM(u.response_tokens), 0)::BIGINT AS response_tokens,
+	COALESCE(AVG(CASE WHEN u.status_code >= 400 THEN 1.0 ELSE 0.0 END), 0.0) AS error_rate,
+	COALESCE(
+		SUM(
+			CASE
+				WHEN mp.id IS NULL THEN 0
+				ELSE
+					(u.request_tokens::DOUBLE PRECISION / 1000000.0) * mp.input_price_per_mtok +
+					(u.response_tokens::DOUBLE PRECISION / 1000000.0) * mp.output_price_per_mtok
+			END
+		),
+		0
+	)::DOUBLE PRECISION AS estimated_cost,
+	COUNT(*) FILTER (WHERE mp.id IS NOT NULL)::BIGINT AS priced_request_count
+FROM usage_logs u
+LEFT JOIN model_pricing mp
+	ON mp.provider = u.provider
+	AND mp.model = u.model
+	AND u.created_at >= mp.effective_from
+	AND (mp.effective_to IS NULL OR u.created_at < mp.effective_to)
+WHERE u.org_id = $1
+  AND u.created_at >= $2
+  AND u.created_at < $3
+GROUP BY u.team_id
 ORDER BY COUNT(*) DESC, team_id ASC;
 `
 
@@ -810,18 +877,21 @@ ORDER BY COUNT(*) DESC, team_id ASC;
 	items := make([]map[string]any, 0)
 	for rows.Next() {
 		var teamID string
-		var requestCount, requestTokens, responseTokens int64
-		var errorRate float64
-		if err := rows.Scan(&teamID, &requestCount, &requestTokens, &responseTokens, &errorRate); err != nil {
+		var requestCount, requestTokens, responseTokens, pricedRequestCount int64
+		var errorRate, estimatedCost float64
+		if err := rows.Scan(&teamID, &requestCount, &requestTokens, &responseTokens, &errorRate, &estimatedCost, &pricedRequestCount); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to parse usage by team")
 			return
 		}
 		items = append(items, map[string]any{
-			"team_id":         teamID,
-			"request_count":   requestCount,
-			"request_tokens":  requestTokens,
-			"response_tokens": responseTokens,
-			"error_rate":      errorRate,
+			"team_id":                teamID,
+			"request_count":          requestCount,
+			"request_tokens":         requestTokens,
+			"response_tokens":        responseTokens,
+			"error_rate":             errorRate,
+			"estimated_cost":         estimatedCost,
+			"priced_request_count":   pricedRequestCount,
+			"unpriced_request_count": requestCount - pricedRequestCount,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -830,9 +900,11 @@ ORDER BY COUNT(*) DESC, team_id ASC;
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"from":  from.UTC().Format(time.RFC3339),
-		"to":    to.UTC().Format(time.RFC3339),
-		"items": items,
+		"from":                    from.UTC().Format(time.RFC3339),
+		"to":                      to.UTC().Format(time.RFC3339),
+		"estimated_cost_currency": "USD",
+		"cost_estimate":           true,
+		"items":                   items,
 	})
 }
 
@@ -855,17 +927,34 @@ func (h *controlHandler) handleUsageByModel(w http.ResponseWriter, r *http.Reque
 
 	const usageByModelSQL = `
 SELECT
-	provider,
-	model,
-	COUNT(*)::BIGINT,
-	COALESCE(SUM(request_tokens), 0)::BIGINT,
-	COALESCE(SUM(response_tokens), 0)::BIGINT,
-	COALESCE(AVG(CASE WHEN status_code >= 400 THEN 1.0 ELSE 0.0 END), 0.0)
-FROM usage_logs
-WHERE org_id = $1
-  AND created_at >= $2
-  AND created_at < $3
-GROUP BY provider, model
+	u.provider,
+	u.model,
+	COUNT(*)::BIGINT AS request_count,
+	COALESCE(SUM(u.request_tokens), 0)::BIGINT AS request_tokens,
+	COALESCE(SUM(u.response_tokens), 0)::BIGINT AS response_tokens,
+	COALESCE(AVG(CASE WHEN u.status_code >= 400 THEN 1.0 ELSE 0.0 END), 0.0) AS error_rate,
+	COALESCE(
+		SUM(
+			CASE
+				WHEN mp.id IS NULL THEN 0
+				ELSE
+					(u.request_tokens::DOUBLE PRECISION / 1000000.0) * mp.input_price_per_mtok +
+					(u.response_tokens::DOUBLE PRECISION / 1000000.0) * mp.output_price_per_mtok
+			END
+		),
+		0
+	)::DOUBLE PRECISION AS estimated_cost,
+	COUNT(*) FILTER (WHERE mp.id IS NOT NULL)::BIGINT AS priced_request_count
+FROM usage_logs u
+LEFT JOIN model_pricing mp
+	ON mp.provider = u.provider
+	AND mp.model = u.model
+	AND u.created_at >= mp.effective_from
+	AND (mp.effective_to IS NULL OR u.created_at < mp.effective_to)
+WHERE u.org_id = $1
+  AND u.created_at >= $2
+  AND u.created_at < $3
+GROUP BY u.provider, u.model
 ORDER BY COUNT(*) DESC, provider ASC, model ASC;
 `
 
@@ -879,19 +968,22 @@ ORDER BY COUNT(*) DESC, provider ASC, model ASC;
 	items := make([]map[string]any, 0)
 	for rows.Next() {
 		var provider, model string
-		var requestCount, requestTokens, responseTokens int64
-		var errorRate float64
-		if err := rows.Scan(&provider, &model, &requestCount, &requestTokens, &responseTokens, &errorRate); err != nil {
+		var requestCount, requestTokens, responseTokens, pricedRequestCount int64
+		var errorRate, estimatedCost float64
+		if err := rows.Scan(&provider, &model, &requestCount, &requestTokens, &responseTokens, &errorRate, &estimatedCost, &pricedRequestCount); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to parse usage by model")
 			return
 		}
 		items = append(items, map[string]any{
-			"provider":        provider,
-			"model":           model,
-			"request_count":   requestCount,
-			"request_tokens":  requestTokens,
-			"response_tokens": responseTokens,
-			"error_rate":      errorRate,
+			"provider":               provider,
+			"model":                  model,
+			"request_count":          requestCount,
+			"request_tokens":         requestTokens,
+			"response_tokens":        responseTokens,
+			"error_rate":             errorRate,
+			"estimated_cost":         estimatedCost,
+			"priced_request_count":   pricedRequestCount,
+			"unpriced_request_count": requestCount - pricedRequestCount,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -900,9 +992,11 @@ ORDER BY COUNT(*) DESC, provider ASC, model ASC;
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"from":  from.UTC().Format(time.RFC3339),
-		"to":    to.UTC().Format(time.RFC3339),
-		"items": items,
+		"from":                    from.UTC().Format(time.RFC3339),
+		"to":                      to.UTC().Format(time.RFC3339),
+		"estimated_cost_currency": "USD",
+		"cost_estimate":           true,
+		"items":                   items,
 	})
 }
 

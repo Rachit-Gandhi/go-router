@@ -39,6 +39,19 @@ type HealthCheck struct {
 	CheckedAt time.Time
 }
 
+type ModelPricing struct {
+	ID                 int64
+	Provider           string
+	Model              string
+	InputPricePerMtok  float64
+	OutputPricePerMtok float64
+	Currency           string
+	Source             string
+	EffectiveFrom      time.Time
+	EffectiveTo        sql.NullTime
+	CreatedAt          time.Time
+}
+
 type Org struct {
 	ID          string
 	Name        string

@@ -44,6 +44,7 @@
 
 ## Commit Journal
 <!-- COMMIT_JOURNAL_START -->
+- 2026-03-15T21:50:16+05:30 5f25456: Add model pricing sync and estimated usage cost metrics [files: Makefile,cmd/pricing-sync/main.go,db/migrations/000005_model_pricing.sql,db/query/model_pricing.sql,db/query/model_pricing.sql.go,db/query/models.go,frontend/README.md,internal/control/httpapi/read_endpoints.go,internal/control/httpapi/visibility_test.go,internal/pricing/data/static_prices.json,internal/pricing/static.go,internal/pricing/sync.go,internal/pricing/sync_test.go]
 - 2026-03-15T21:11:10+05:30 d94b48b: Address CodeRabbit follow-ups for redaction and fingerprinting [files: internal/httputil/redact.go,internal/httputil/redact_test.go,internal/router/httpapi/handler.go,internal/router/httpapi/handler_test.go]
 - 2026-03-15T19:45:18+05:30 952bd71: Implement milestone 5 usage logging and hardening [files: internal/httputil/redact.go,internal/httputil/redact_test.go,internal/router/httpapi/handler.go,internal/router/httpapi/milestone4_test.go,internal/router/httpapi/postgres_test.go]
 - 2026-03-15T19:15:53+05:30 2a3b008: Resolve follow-up CodeRabbit review comments [files: internal/control/httpapi/read_endpoints.go,internal/control/httpapi/read_endpoints_test.go,internal/control/httpapi/visibility_test.go,internal/router/httpapi/handler.go,internal/router/httpapi/milestone4_test.go]

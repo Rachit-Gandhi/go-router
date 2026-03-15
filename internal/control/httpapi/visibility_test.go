@@ -77,6 +77,19 @@ func TestVisibilityEndpoints(t *testing.T) {
 			t.Fatalf("create usage log %d: %v", i, err)
 		}
 	}
+	if _, err := tc.db.ExecContext(t.Context(), `
+INSERT INTO model_pricing (
+	provider,
+	model,
+	input_price_per_mtok,
+	output_price_per_mtok,
+	currency,
+	source,
+	effective_from
+) VALUES ('openai', 'gpt-4o-mini', 0.15, 0.60, 'USD', 'test-fixture', NOW() - INTERVAL '1 day');
+`); err != nil {
+		t.Fatalf("seed model pricing: %v", err)
+	}
 
 	sessionRec := performGETRequest(t, h, "/v1/control/session", ownerCookie)
 	requireStatus(t, sessionRec, http.StatusOK)
@@ -180,6 +193,15 @@ func TestVisibilityEndpoints(t *testing.T) {
 	if int(usageSummaryBody["request_count"].(float64)) < 2 {
 		t.Fatalf("expected usage summary request_count >= 2, got %#v", usageSummaryBody)
 	}
+	if usageSummaryBody["cost_estimate"] != true {
+		t.Fatalf("expected cost_estimate=true, got %#v", usageSummaryBody["cost_estimate"])
+	}
+	if usageSummaryBody["estimated_cost_currency"] != "USD" {
+		t.Fatalf("expected estimated_cost_currency=USD, got %#v", usageSummaryBody["estimated_cost_currency"])
+	}
+	if usageSummaryBody["estimated_cost"].(float64) <= 0 {
+		t.Fatalf("expected estimated_cost > 0, got %#v", usageSummaryBody["estimated_cost"])
+	}
 
 	usageSeriesRec := performGETRequest(t, h, "/v1/control/orgs/"+orgID+"/usage/timeseries?from="+from+"&to="+to+"&bucket=hour", ownerCookie)
 	requireStatus(t, usageSeriesRec, http.StatusOK)
@@ -187,6 +209,9 @@ func TestVisibilityEndpoints(t *testing.T) {
 	decodeJSON(t, usageSeriesRec, &usageSeriesBody)
 	if len(usageSeriesBody["items"].([]any)) < 1 {
 		t.Fatalf("expected usage timeseries rows, got %#v", usageSeriesBody)
+	}
+	if usageSeriesBody["estimated_cost_currency"] != "USD" {
+		t.Fatalf("expected usage timeseries estimated_cost_currency=USD, got %#v", usageSeriesBody["estimated_cost_currency"])
 	}
 
 	usageByTeamRec := performGETRequest(t, h, "/v1/control/orgs/"+orgID+"/usage/by-team?from="+from+"&to="+to, ownerCookie)
@@ -196,6 +221,10 @@ func TestVisibilityEndpoints(t *testing.T) {
 	if len(usageByTeamBody["items"].([]any)) < 1 {
 		t.Fatalf("expected usage by-team rows, got %#v", usageByTeamBody)
 	}
+	firstTeamItem := usageByTeamBody["items"].([]any)[0].(map[string]any)
+	if firstTeamItem["estimated_cost"].(float64) <= 0 {
+		t.Fatalf("expected by-team estimated_cost > 0, got %#v", firstTeamItem["estimated_cost"])
+	}
 
 	usageByModelRec := performGETRequest(t, h, "/v1/control/orgs/"+orgID+"/usage/by-model?from="+from+"&to="+to, ownerCookie)
 	requireStatus(t, usageByModelRec, http.StatusOK)
@@ -203,6 +232,10 @@ func TestVisibilityEndpoints(t *testing.T) {
 	decodeJSON(t, usageByModelRec, &usageByModelBody)
 	if len(usageByModelBody["items"].([]any)) < 1 {
 		t.Fatalf("expected usage by-model rows, got %#v", usageByModelBody)
+	}
+	firstModelItem := usageByModelBody["items"].([]any)[0].(map[string]any)
+	if firstModelItem["estimated_cost"].(float64) <= 0 {
+		t.Fatalf("expected by-model estimated_cost > 0, got %#v", firstModelItem["estimated_cost"])
 	}
 
 	eventsRec := performGETRequest(t, h, "/v1/control/orgs/"+orgID+"/events?limit=20", ownerCookie)
