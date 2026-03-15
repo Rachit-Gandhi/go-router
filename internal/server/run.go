@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -35,10 +36,14 @@ func Run(srv Runner, signals <-chan os.Signal, timeout time.Duration) error {
 			return err
 		}
 
-		err := <-errCh
-		if errors.Is(err, http.ErrServerClosed) || err == nil {
-			return nil
+		select {
+		case err := <-errCh:
+			if errors.Is(err, http.ErrServerClosed) || err == nil {
+				return nil
+			}
+			return err
+		case <-time.After(timeout):
+			return fmt.Errorf("timed out waiting for server to stop after shutdown")
 		}
-		return err
 	}
 }

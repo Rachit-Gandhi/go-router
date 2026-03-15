@@ -49,6 +49,9 @@ HASH="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
 DATE_UTC="$(git -C "${REPO_ROOT}" show -s --format=%cI HEAD)"
 SUBJECT="$(git -C "${REPO_ROOT}" show -s --format=%s HEAD | tr -d '\n')"
 FILES="$(git -C "${REPO_ROOT}" show --name-only --pretty=format: HEAD | sed '/^$/d' | paste -sd ',' -)"
+if [[ -z "${FILES}" ]]; then
+  FILES="none"
+fi
 
 ENTRY="- ${DATE_UTC} ${HASH}: ${SUBJECT} [files: ${FILES}]"
 
@@ -71,7 +74,7 @@ TMP_FILE="$(mktemp)"
 awk -v start="${START_MARK}" -v end="${END_MARK}" -v entry="${ENTRY}" '
   {
     print $0
-    if ($0 == start) {
+    if (index($0, start) == 1) {
       print entry
     }
   }

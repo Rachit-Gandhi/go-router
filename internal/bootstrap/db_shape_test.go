@@ -36,10 +36,22 @@ func TestListHealthChecksIsBoundedAndStable(t *testing.T) {
 	}
 
 	got := string(content)
-	if !strings.Contains(got, "ORDER BY checked_at DESC, id DESC") {
+	startMarker := "-- name: ListHealthChecks :many"
+	start := strings.Index(got, startMarker)
+	if start == -1 {
+		t.Fatalf("expected %q marker", startMarker)
+	}
+
+	queryBlock := got[start:]
+	next := strings.Index(queryBlock[len(startMarker):], "-- name:")
+	if next != -1 {
+		queryBlock = queryBlock[:len(startMarker)+next]
+	}
+
+	if !strings.Contains(queryBlock, "ORDER BY checked_at DESC, id DESC") {
 		t.Fatalf("expected stable ordering with checked_at and id tie-breaker")
 	}
-	if !strings.Contains(got, "LIMIT $1") {
+	if !strings.Contains(queryBlock, "LIMIT $1") {
 		t.Fatalf("expected bounded query with LIMIT $1")
 	}
 }

@@ -6,6 +6,7 @@ import "net/http"
 func HealthHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
