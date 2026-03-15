@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -204,6 +205,7 @@ func (h *routerHandler) handleChatCompletions(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
+	startedAt := time.Now()
 
 	allowedRows, err := h.listAllEffectiveAllowedModels(r.Context(), identity.OrgID, identity.TeamID)
 	if err != nil {
@@ -233,12 +235,20 @@ func (h *routerHandler) handleChatCompletions(w http.ResponseWriter, r *http.Req
 
 	adapter, ok := h.adapters[selected.Provider]
 	if !ok {
+		if err := h.persistUsageLog(r.Context(), identity, selected, req, http.StatusBadGateway, 0, startedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist usage log")
+			return
+		}
 		writeError(w, http.StatusBadGateway, "provider adapter not configured")
 		return
 	}
 
 	completion, err := adapter.Complete(r.Context(), adapterCompletionRequest{Model: selected.Model, Messages: req.Messages})
 	if err != nil {
+		if logErr := h.persistUsageLog(r.Context(), identity, selected, req, http.StatusBadGateway, 0, startedAt); logErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist usage log")
+			return
+		}
 		writeError(w, http.StatusBadGateway, "upstream completion failed")
 		return
 	}
@@ -247,6 +257,10 @@ func (h *routerHandler) handleChatCompletions(w http.ResponseWriter, r *http.Req
 	completionTokens := completion.CompletionTokens
 	if completionTokens < 1 {
 		completionTokens = 1
+	}
+	if err := h.persistUsageLog(r.Context(), identity, selected, req, http.StatusOK, completionTokens, startedAt); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist usage log")
+		return
 	}
 
 	responseID, err := randomID("chatcmpl")
@@ -397,6 +411,68 @@ func estimatePromptTokens(messages []chatMessage) int {
 		return 1
 	}
 	return tokens
+}
+
+func (h *routerHandler) persistUsageLog(
+	ctx context.Context,
+	identity dbquery.ResolveIdentityByAPIKeyHashRow,
+	selected allowedModel,
+	req chatCompletionsRequest,
+	statusCode int,
+	completionTokens int,
+	startedAt time.Time,
+) error {
+	requestTokens := estimatePromptTokens(req.Messages)
+	if requestTokens < 1 {
+		requestTokens = 1
+	}
+	if completionTokens < 0 {
+		completionTokens = 0
+	}
+	latencyMs := time.Since(startedAt).Milliseconds()
+	if latencyMs < 0 {
+		latencyMs = 0
+	}
+
+	_, err := h.queries.CreateUsageLog(ctx, dbquery.CreateUsageLogParams{
+		OrgID:          identity.OrgID,
+		TeamID:         identity.TeamID,
+		UserID:         identity.UserID,
+		ApiKeyID:       identity.ID,
+		Provider:       selected.Provider,
+		Model:          selected.Model,
+		RequestTokens:  clampIntToInt32(int64(requestTokens)),
+		ResponseTokens: clampIntToInt32(int64(completionTokens)),
+		LatencyMs:      clampIntToInt32(latencyMs),
+		StatusCode:     int32(statusCode),
+		RequestFingerprint: sql.NullString{
+			String: requestFingerprint(req),
+			Valid:  true,
+		},
+	})
+	return err
+}
+
+func requestFingerprint(req chatCompletionsRequest) string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(req.Model))
+	for _, msg := range req.Messages {
+		b.WriteString("|")
+		b.WriteString(strings.TrimSpace(msg.Role))
+		b.WriteString(":")
+		b.WriteString(strings.TrimSpace(msg.Content))
+	}
+	return hashValue(b.String())
+}
+
+func clampIntToInt32(value int64) int32 {
+	if value < 0 {
+		return 0
+	}
+	if value > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(value)
 }
 
 func estimateTokens(content string) int {
