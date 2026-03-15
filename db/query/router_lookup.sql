@@ -16,4 +16,6 @@ LEFT JOIN team_model_policies AS t
 WHERE o.org_id = $1
   AND o.is_allowed = TRUE
   AND COALESCE(t.is_allowed, TRUE) = TRUE
-ORDER BY o.provider, o.model;
+ORDER BY o.provider, o.model
+LIMIT sqlc.arg(limit_rows)
+OFFSET COALESCE(sqlc.narg(offset_rows)::int, 0);

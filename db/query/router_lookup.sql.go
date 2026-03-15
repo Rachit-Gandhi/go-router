@@ -23,11 +23,15 @@ WHERE o.org_id = $1
   AND o.is_allowed = TRUE
   AND COALESCE(t.is_allowed, TRUE) = TRUE
 ORDER BY o.provider, o.model
+LIMIT $4
+OFFSET COALESCE($3::int, 0)
 `
 
 type ListEffectiveAllowedModelsParams struct {
-	OrgID  string
-	TeamID string
+	OrgID      string
+	TeamID     string
+	OffsetRows sql.NullInt32
+	LimitRows  int32
 }
 
 type ListEffectiveAllowedModelsRow struct {
@@ -36,7 +40,12 @@ type ListEffectiveAllowedModelsRow struct {
 }
 
 func (q *Queries) ListEffectiveAllowedModels(ctx context.Context, arg ListEffectiveAllowedModelsParams) ([]ListEffectiveAllowedModelsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listEffectiveAllowedModels, arg.OrgID, arg.TeamID)
+	rows, err := q.db.QueryContext(ctx, listEffectiveAllowedModels,
+		arg.OrgID,
+		arg.TeamID,
+		arg.OffsetRows,
+		arg.LimitRows,
+	)
 	if err != nil {
 		return nil, err
 	}

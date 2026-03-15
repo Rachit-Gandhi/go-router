@@ -19,16 +19,17 @@ RETURNING id, org_id, user_id, token_hash, session_id, device_info, expires_at, 
 -- name: GetRefreshTokenByID :one
 SELECT id, org_id, user_id, token_hash, session_id, device_info, expires_at, revoked_at, last_used_at, created_at
 FROM auth_refresh_tokens
-WHERE id = $1;
+WHERE id = $1 AND org_id = $2;
 
 -- name: RevokeRefreshToken :execrows
 UPDATE auth_refresh_tokens
 SET revoked_at = NOW()
-WHERE id = $1 AND revoked_at IS NULL;
+WHERE id = $1 AND org_id = $2 AND revoked_at IS NULL;
 
 -- name: TouchRefreshToken :execrows
 UPDATE auth_refresh_tokens
 SET last_used_at = NOW()
 WHERE id = $1
+  AND org_id = $2
   AND revoked_at IS NULL
   AND expires_at > NOW();

@@ -24,14 +24,17 @@ $$;
 -- +goose Down
 DO $$
 DECLARE
-    current_month DATE := date_trunc('month', NOW())::date;
-    next_month DATE := (date_trunc('month', NOW()) + INTERVAL '1 month')::date;
     partition_name TEXT;
 BEGIN
-    partition_name := format('usage_logs_%s', to_char(next_month, 'YYYYMM'));
-    EXECUTE format('DROP TABLE IF EXISTS %I;', partition_name);
-
-    partition_name := format('usage_logs_%s', to_char(current_month, 'YYYYMM'));
-    EXECUTE format('DROP TABLE IF EXISTS %I;', partition_name);
+    FOR partition_name IN
+        SELECT c.relname
+        FROM pg_inherits AS i
+        JOIN pg_class AS c ON c.oid = i.inhrelid
+        WHERE i.inhparent = 'usage_logs'::regclass
+          AND c.relname LIKE 'usage_logs_%'
+          AND c.relname <> 'usage_logs_default'
+    LOOP
+        EXECUTE format('DROP TABLE IF EXISTS %I;', partition_name);
+    END LOOP;
 END
 $$;
