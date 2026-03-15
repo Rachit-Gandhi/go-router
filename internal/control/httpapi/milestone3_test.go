@@ -15,7 +15,7 @@ func TestCreateAPIKeyReturnsPlaintextOnceAndStoresHash(t *testing.T) {
 	h := tc.handler
 	queries := dbquery.New(tc.db)
 
-	orgID, _, ownerCookie := signupAndAuthenticateOwner(t, h)
+	orgID, _, ownerCookie := signupAndAuthenticateOwner(t, tc)
 	teamID := createTeam(t, h, orgID, ownerCookie, "key-team")
 	memberUserID := addMemberByEmail(t, h, orgID, teamID, ownerCookie, "member@example.com", "Key Member", "")
 
@@ -51,7 +51,7 @@ func TestRevokeAPIKeyDisablesIdentityLookup(t *testing.T) {
 	h := tc.handler
 	queries := dbquery.New(tc.db)
 
-	orgID, _, ownerCookie := signupAndAuthenticateOwner(t, h)
+	orgID, _, ownerCookie := signupAndAuthenticateOwner(t, tc)
 	teamID := createTeam(t, h, orgID, ownerCookie, "revoke-team")
 	memberUserID := addMemberByEmail(t, h, orgID, teamID, ownerCookie, "member2@example.com", "Revoke Member", "")
 
@@ -83,7 +83,7 @@ func TestCreateAPIKeyReturnsConflictWhenActiveKeyExists(t *testing.T) {
 	tc := newTestHandler(t)
 	h := tc.handler
 
-	orgID, _, ownerCookie := signupAndAuthenticateOwner(t, h)
+	orgID, _, ownerCookie := signupAndAuthenticateOwner(t, tc)
 	teamID := createTeam(t, h, orgID, ownerCookie, "duplicate-key-team")
 	memberUserID := addMemberByEmail(t, h, orgID, teamID, ownerCookie, "dup-key@example.com", "Duplicate Key Member", "")
 
@@ -103,7 +103,7 @@ func TestProviderKeyStoredEncryptedAndTeamPolicyReduceOnly(t *testing.T) {
 	h := tc.handler
 	queries := dbquery.New(tc.db)
 
-	orgID, _, ownerCookie := signupAndAuthenticateOwner(t, h)
+	orgID, _, ownerCookie := signupAndAuthenticateOwner(t, tc)
 	teamID := createTeam(t, h, orgID, ownerCookie, "policy-team")
 
 	const providerSecret = "sk-provider-secret-value"

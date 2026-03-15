@@ -15,6 +15,7 @@ import (
 type SessionClaims struct {
 	OrgID          string `json:"org_id"`
 	UserID         string `json:"user_id"`
+	Role           string `json:"role"`
 	RefreshTokenID string `json:"refresh_token_id"`
 	ExpiresAtUnix  int64  `json:"expires_at_unix"`
 }

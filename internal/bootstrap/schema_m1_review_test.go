@@ -106,6 +106,27 @@ func TestUsageLogsPartitionDownUsesCatalogDiscovery(t *testing.T) {
 	}
 }
 
+func TestAuthLoginsMigrationDeclaresTenantLocalizedLoginContext(t *testing.T) {
+	migrationPath := filepath.Clean("../../db/migrations/000005_auth_logins.sql")
+	content, err := os.ReadFile(migrationPath)
+	if err != nil {
+		t.Fatalf("expected auth logins migration file at %s: %v", migrationPath, err)
+	}
+
+	got := string(content)
+	requiredSnippets := []string{
+		"CREATE TABLE IF NOT EXISTS auth_logins",
+		"magic_link_id TEXT NOT NULL UNIQUE REFERENCES auth_magic_links(id) ON DELETE CASCADE",
+		"role TEXT NOT NULL CHECK (role IN ('org_owner', 'team_admin', 'member'))",
+		"CREATE INDEX IF NOT EXISTS idx_auth_logins_email_created_at",
+	}
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(got, snippet) {
+			t.Fatalf("expected auth logins migration to include %q", snippet)
+		}
+	}
+}
+
 func TestAPIKeyQueriesDoNotProjectKeyHashInCreateOrList(t *testing.T) {
 	queryPath := filepath.Clean("../../db/query/api_keys.sql")
 	content, err := os.ReadFile(queryPath)

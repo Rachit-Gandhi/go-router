@@ -39,6 +39,7 @@ type controlHandler struct {
 	db                *sql.DB
 	queries           *dbquery.Queries
 	sessions          *auth.SessionCodec
+	magicLinks        MagicLinkSender
 	providerKeySecret string
 	secureCookies     bool
 	now               func() time.Time
@@ -85,16 +86,26 @@ func NewHandlerWithPostgresFromEnv(now func() time.Time) (http.Handler, *sql.DB,
 		return nil, nil, fmt.Errorf("new session codec: %w", err)
 	}
 
+	magicLinkSender, err := newSMTPMagicLinkSenderFromEnv()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	db, err := store.OpenPostgres(context.Background(), dsn)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open postgres: %w", err)
 	}
 
-	return NewHandlerWithDB(db, codec, providerKeySecret, !allowInsecureCookies, now), db, nil
+	return NewHandlerWithDBAndSender(db, codec, providerKeySecret, !allowInsecureCookies, now, magicLinkSender), db, nil
 }
 
 // NewHandlerWithDB builds the control-plane router with explicit DB/session dependencies.
 func NewHandlerWithDB(db *sql.DB, sessionCodec *auth.SessionCodec, providerKeySecret string, secureCookies bool, now func() time.Time) http.Handler {
+	return NewHandlerWithDBAndSender(db, sessionCodec, providerKeySecret, secureCookies, now, noopMagicLinkSender{})
+}
+
+// NewHandlerWithDBAndSender builds the control-plane router with explicit DB/session and mailer dependencies.
+func NewHandlerWithDBAndSender(db *sql.DB, sessionCodec *auth.SessionCodec, providerKeySecret string, secureCookies bool, now func() time.Time, magicLinkSender MagicLinkSender) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -107,11 +118,15 @@ func NewHandlerWithDB(db *sql.DB, sessionCodec *auth.SessionCodec, providerKeySe
 	if providerKeySecret == "" {
 		panic("provider key secret is required")
 	}
+	if magicLinkSender == nil {
+		panic("magic link sender is required")
+	}
 
 	h := &controlHandler{
 		db:                db,
 		queries:           dbquery.New(db),
 		sessions:          sessionCodec,
+		magicLinks:        magicLinkSender,
 		providerKeySecret: providerKeySecret,
 		secureCookies:     secureCookies,
 		now:               now,
@@ -209,7 +224,6 @@ func (h *controlHandler) handleCreateOrg(w http.ResponseWriter, r *http.Request)
 func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req struct {
-		OrgID string `json:"org_id"`
 		Email string `json:"email"`
 	}
 	if err := decodeJSONBody(r, &req); err != nil {
@@ -217,10 +231,9 @@ func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	req.OrgID = strings.TrimSpace(req.OrgID)
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	if req.OrgID == "" || req.Email == "" {
-		writeError(w, http.StatusBadRequest, "org_id and email are required")
+	if req.Email == "" {
+		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
 
@@ -233,14 +246,20 @@ func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to lookup user")
 		return
 	}
-	if _, err := h.queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: req.OrgID, UserID: user.ID}); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusForbidden, "user is not a member of the org")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to verify org membership")
+
+	memberships, err := h.queries.ListOrgMembershipsByUser(ctx, dbquery.ListOrgMembershipsByUserParams{
+		UserID: user.ID,
+		Limit:  100,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve org memberships")
 		return
 	}
+	if len(memberships) == 0 {
+		writeError(w, http.StatusForbidden, "user is not a member of any org")
+		return
+	}
+	selectedMembership := memberships[0]
 
 	now := h.now()
 	magicLinkID, err := randomID("ml")
@@ -254,9 +273,16 @@ func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if _, err := h.queries.CreateMagicLink(ctx, dbquery.CreateMagicLinkParams{
+	tx, err := h.beginTx(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Tx.Rollback()
+
+	if _, err := tx.Queries.CreateMagicLink(ctx, dbquery.CreateMagicLinkParams{
 		ID:        magicLinkID,
-		OrgID:     req.OrgID,
+		OrgID:     selectedMembership.OrgID,
 		Email:     req.Email,
 		CodeHash:  hashValue(code),
 		ExpiresAt: now.Add(magicLinkTTL),
@@ -265,10 +291,45 @@ func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	loginID, err := randomID("login")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate login ID")
+		return
+	}
+	if _, err := tx.Queries.CreateAuthLogin(ctx, dbquery.CreateAuthLoginParams{
+		ID:          loginID,
+		MagicLinkID: magicLinkID,
+		OrgID:       selectedMembership.OrgID,
+		UserID:      selectedMembership.UserID,
+		Role:        selectedMembership.Role,
+		Email:       req.Email,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create login context")
+		return
+	}
+
+	if err := tx.Tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to finalize magic link")
+		return
+	}
+
+	if err := h.magicLinks.SendMagicLink(ctx, MagicLinkMessage{
+		ToEmail:     req.Email,
+		MagicLinkID: magicLinkID,
+		Code:        code,
+		OrgID:       selectedMembership.OrgID,
+		UserID:      selectedMembership.UserID,
+		Role:        selectedMembership.Role,
+		ExpiresAt:   now.Add(magicLinkTTL),
+	}); err != nil {
+		writeError(w, http.StatusBadGateway, "failed to deliver magic link")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"magic_link_id": magicLinkID,
-		"code":          code,
 		"expires_at":    now.Add(magicLinkTTL).UTC().Format(time.RFC3339),
+		"delivery":      "smtp",
 	})
 }
 
@@ -310,16 +371,21 @@ func (h *controlHandler) handleMagicLinkExchange(w http.ResponseWriter, r *http.
 		return
 	}
 
-	user, err := tx.Queries.GetUserByEmail(ctx, link.Email)
+	login, err := tx.Queries.GetAuthLoginByMagicLinkID(ctx, link.ID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusUnauthorized, "user not found")
+			writeError(w, http.StatusUnauthorized, "invalid login context")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to resolve user")
+		writeError(w, http.StatusInternalServerError, "failed to resolve login context")
 		return
 	}
-	if _, err := tx.Queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: link.OrgID, UserID: user.ID}); err != nil {
+	if login.OrgID != link.OrgID || !strings.EqualFold(login.Email, link.Email) {
+		writeError(w, http.StatusUnauthorized, "invalid login context")
+		return
+	}
+	membership, err := tx.Queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: login.OrgID, UserID: login.UserID})
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusForbidden, "user is not a member of the org")
 			return
@@ -345,8 +411,8 @@ func (h *controlHandler) handleMagicLinkExchange(w http.ResponseWriter, r *http.
 	}
 	if _, err := tx.Queries.CreateRefreshToken(ctx, dbquery.CreateRefreshTokenParams{
 		ID:         refreshID,
-		OrgID:      link.OrgID,
-		UserID:     user.ID,
+		OrgID:      login.OrgID,
+		UserID:     login.UserID,
 		TokenHash:  hashValue(tokenMaterial),
 		SessionID:  sessionID,
 		DeviceInfo: sql.NullString{String: truncateDeviceInfo(r.UserAgent()), Valid: r.UserAgent() != ""},
@@ -363,8 +429,9 @@ func (h *controlHandler) handleMagicLinkExchange(w http.ResponseWriter, r *http.
 
 	sessionEnds := now.Add(sessionTTL)
 	claims := auth.SessionClaims{
-		OrgID:          link.OrgID,
-		UserID:         user.ID,
+		OrgID:          login.OrgID,
+		UserID:         login.UserID,
+		Role:           membership.Role,
 		RefreshTokenID: refreshID,
 		ExpiresAtUnix:  sessionEnds.Unix(),
 	}
@@ -374,8 +441,9 @@ func (h *controlHandler) handleMagicLinkExchange(w http.ResponseWriter, r *http.
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"org_id":     link.OrgID,
-		"user_id":    user.ID,
+		"org_id":     login.OrgID,
+		"user_id":    login.UserID,
+		"role":       membership.Role,
 		"expires_at": sessionEnds.UTC().Format(time.RFC3339),
 	})
 }
@@ -394,6 +462,19 @@ func (h *controlHandler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Tx.Rollback()
+
+	membership, err := tx.Queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{
+		OrgID:  claims.OrgID,
+		UserID: claims.UserID,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusUnauthorized, "session invalidated")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve membership")
+		return
+	}
 
 	rows, err := tx.Queries.RevokeRefreshToken(ctx, dbquery.RevokeRefreshTokenParams{ID: claims.RefreshTokenID, OrgID: claims.OrgID})
 	if err != nil {
@@ -442,6 +523,7 @@ func (h *controlHandler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if err := h.setSessionCookie(w, auth.SessionClaims{
 		OrgID:          claims.OrgID,
 		UserID:         claims.UserID,
+		Role:           membership.Role,
 		RefreshTokenID: newRefreshID,
 		ExpiresAtUnix:  sessionEnds.Unix(),
 	}, sessionEnds); err != nil {
@@ -452,6 +534,7 @@ func (h *controlHandler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"org_id":     claims.OrgID,
 		"user_id":    claims.UserID,
+		"role":       membership.Role,
 		"expires_at": sessionEnds.UTC().Format(time.RFC3339),
 	})
 }

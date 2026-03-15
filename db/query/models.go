@@ -10,6 +10,16 @@ import (
 	"time"
 )
 
+type AuthLogin struct {
+	ID          string
+	MagicLinkID string
+	OrgID       string
+	UserID      string
+	Role        string
+	Email       string
+	CreatedAt   time.Time
+}
+
 type AuthMagicLink struct {
 	ID         string
 	OrgID      string

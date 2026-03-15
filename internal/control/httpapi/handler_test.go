@@ -71,6 +71,34 @@ func TestNewHandlerWithPostgresFromEnvRejectsInvalidInsecureCookiesFlag(t *testi
 	}
 }
 
+func TestNewHandlerWithPostgresFromEnvRequiresSMTPHost(t *testing.T) {
+	t.Setenv("CONTROL_DB_DSN", "postgres://invalid")
+	t.Setenv("CONTROL_SESSION_SECRET", "session-secret")
+	t.Setenv("CONTROL_PROVIDER_KEY_SECRET", "provider-secret")
+	t.Setenv("CONTROL_SMTP_HOST", "")
+	t.Setenv("CONTROL_SMTP_PORT", "587")
+	t.Setenv("CONTROL_SMTP_FROM", "no-reply@example.com")
+
+	h, db, err := NewHandlerWithPostgresFromEnv(time.Now)
+	if err == nil || !strings.Contains(err.Error(), "CONTROL_SMTP_HOST is required") {
+		t.Fatalf("expected CONTROL_SMTP_HOST required error, got handler=%v db=%v err=%v", h, db, err)
+	}
+}
+
+func TestNewHandlerWithPostgresFromEnvRejectsInvalidSMTPPort(t *testing.T) {
+	t.Setenv("CONTROL_DB_DSN", "postgres://invalid")
+	t.Setenv("CONTROL_SESSION_SECRET", "session-secret")
+	t.Setenv("CONTROL_PROVIDER_KEY_SECRET", "provider-secret")
+	t.Setenv("CONTROL_SMTP_HOST", "smtp.example.com")
+	t.Setenv("CONTROL_SMTP_PORT", "abc")
+	t.Setenv("CONTROL_SMTP_FROM", "no-reply@example.com")
+
+	h, db, err := NewHandlerWithPostgresFromEnv(time.Now)
+	if err == nil || !strings.Contains(err.Error(), "CONTROL_SMTP_PORT must be a positive integer") {
+		t.Fatalf("expected invalid smtp port error, got handler=%v db=%v err=%v", h, db, err)
+	}
+}
+
 func TestSetSessionCookieSecureAttributeRespectsConfig(t *testing.T) {
 	codec, err := auth.NewSessionCodec("test-control-session-secret")
 	if err != nil {

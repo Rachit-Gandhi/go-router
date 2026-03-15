@@ -143,6 +143,54 @@ func (q *Queries) ListOrgMembershipsByOrg(ctx context.Context, arg ListOrgMember
 	return items, nil
 }
 
+const listOrgMembershipsByUser = `-- name: ListOrgMembershipsByUser :many
+SELECT org_id, user_id, role, created_at
+FROM org_memberships
+WHERE user_id = $1
+ORDER BY
+    CASE role
+        WHEN 'org_owner' THEN 1
+        WHEN 'team_admin' THEN 2
+        ELSE 3
+    END,
+    created_at ASC,
+    org_id ASC
+LIMIT $2
+`
+
+type ListOrgMembershipsByUserParams struct {
+	UserID string
+	Limit  int32
+}
+
+func (q *Queries) ListOrgMembershipsByUser(ctx context.Context, arg ListOrgMembershipsByUserParams) ([]OrgMembership, error) {
+	rows, err := q.db.QueryContext(ctx, listOrgMembershipsByUser, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrgMembership
+	for rows.Next() {
+		var i OrgMembership
+		if err := rows.Scan(
+			&i.OrgID,
+			&i.UserID,
+			&i.Role,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTeamAdminScopes = `-- name: ListTeamAdminScopes :many
 SELECT org_id, team_id, admin_user_id, created_at
 FROM team_admin_scopes
