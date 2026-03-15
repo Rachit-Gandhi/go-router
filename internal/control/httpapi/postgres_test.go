@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -46,7 +47,7 @@ func newTestHandler(t *testing.T) *testControlHandler {
 	}
 	return &testControlHandler{
 		db:      db,
-		handler: NewHandlerWithDB(db, codec, time.Now),
+		handler: NewHandlerWithDB(db, codec, "test-provider-key-secret", false, time.Now),
 	}
 }
 
@@ -72,9 +73,12 @@ func startPostgresForTests() error {
 		return fmt.Errorf("docker not found: %w", err)
 	}
 
-	port, err := reserveTCPPort()
+	portReservation, port, err := reserveTCPPort()
 	if err != nil {
 		return fmt.Errorf("reserve tcp port: %w", err)
+	}
+	if err := portReservation.Close(); err != nil {
+		return fmt.Errorf("release reserved port: %w", err)
 	}
 
 	run := exec.Command(
@@ -93,8 +97,9 @@ func startPostgresForTests() error {
 
 	dsn := fmt.Sprintf("postgres://postgres:postgres@127.0.0.1:%d/gorouter_test?sslmode=disable", port)
 	var db *sql.DB
+	time.Sleep(1 * time.Second)
 	for i := 0; i < 30; i++ {
-		db, err = store.OpenPostgres(dsn)
+		db, err = store.OpenPostgres(context.Background(), dsn)
 		if err == nil {
 			break
 		}
@@ -129,18 +134,18 @@ func resetPostgresData(t *testing.T, db *sql.DB) {
 	}
 }
 
-func reserveTCPPort() (int, error) {
+func reserveTCPPort() (net.Listener, int, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
-	defer ln.Close()
 
 	addr, ok := ln.Addr().(*net.TCPAddr)
 	if !ok {
-		return 0, errors.New("not tcp addr")
+		_ = ln.Close()
+		return nil, 0, errors.New("not tcp addr")
 	}
-	return addr.Port, nil
+	return ln, addr.Port, nil
 }
 
 func repoRoot() (string, error) {

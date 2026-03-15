@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	internalcrypto "github.com/Rachit-Gandhi/go-router/internal/crypto"
 	"github.com/Rachit-Gandhi/go-router/internal/httputil"
 	"github.com/Rachit-Gandhi/go-router/internal/store"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -34,10 +36,12 @@ const (
 )
 
 type controlHandler struct {
-	db       *sql.DB
-	queries  *dbquery.Queries
-	sessions *auth.SessionCodec
-	now      func() time.Time
+	db                *sql.DB
+	queries           *dbquery.Queries
+	sessions          *auth.SessionCodec
+	providerKeySecret string
+	secureCookies     bool
+	now               func() time.Time
 }
 
 // NewHandler builds the control-plane HTTP router using Postgres config from env.
@@ -56,26 +60,41 @@ func NewHandlerWithPostgresFromEnv(now func() time.Time) (http.Handler, *sql.DB,
 		return nil, nil, errors.New("CONTROL_DB_DSN is required")
 	}
 
-	db, err := store.OpenPostgres(dsn)
+	secret := os.Getenv("CONTROL_SESSION_SECRET")
+	if secret == "" {
+		return nil, nil, errors.New("CONTROL_SESSION_SECRET is required")
+	}
+
+	providerKeySecret := os.Getenv("CONTROL_PROVIDER_KEY_SECRET")
+	if providerKeySecret == "" {
+		return nil, nil, errors.New("CONTROL_PROVIDER_KEY_SECRET is required")
+	}
+
+	allowInsecureCookies := false
+	allowInsecureCookiesRaw := strings.TrimSpace(os.Getenv("CONTROL_ALLOW_INSECURE_COOKIES"))
+	if allowInsecureCookiesRaw != "" {
+		parsed, err := strconv.ParseBool(allowInsecureCookiesRaw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid CONTROL_ALLOW_INSECURE_COOKIES value: %w", err)
+		}
+		allowInsecureCookies = parsed
+	}
+
+	codec, err := auth.NewSessionCodec(secret)
+	if err != nil {
+		return nil, nil, fmt.Errorf("new session codec: %w", err)
+	}
+
+	db, err := store.OpenPostgres(context.Background(), dsn)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open postgres: %w", err)
 	}
 
-	secret := os.Getenv("CONTROL_SESSION_SECRET")
-	if secret == "" {
-		secret = "dev-control-session-secret"
-	}
-	codec, err := auth.NewSessionCodec(secret)
-	if err != nil {
-		_ = db.Close()
-		return nil, nil, fmt.Errorf("new session codec: %w", err)
-	}
-
-	return NewHandlerWithDB(db, codec, now), db, nil
+	return NewHandlerWithDB(db, codec, providerKeySecret, !allowInsecureCookies, now), db, nil
 }
 
 // NewHandlerWithDB builds the control-plane router with explicit DB/session dependencies.
-func NewHandlerWithDB(db *sql.DB, sessionCodec *auth.SessionCodec, now func() time.Time) http.Handler {
+func NewHandlerWithDB(db *sql.DB, sessionCodec *auth.SessionCodec, providerKeySecret string, secureCookies bool, now func() time.Time) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -85,12 +104,17 @@ func NewHandlerWithDB(db *sql.DB, sessionCodec *auth.SessionCodec, now func() ti
 	if db == nil {
 		panic("db is required")
 	}
+	if providerKeySecret == "" {
+		panic("provider key secret is required")
+	}
 
 	h := &controlHandler{
-		db:       db,
-		queries:  dbquery.New(db),
-		sessions: sessionCodec,
-		now:      now,
+		db:                db,
+		queries:           dbquery.New(db),
+		sessions:          sessionCodec,
+		providerKeySecret: providerKeySecret,
+		secureCookies:     secureCookies,
+		now:               now,
 	}
 
 	mux := http.NewServeMux()
@@ -500,7 +524,7 @@ func (h *controlHandler) handleCreateTeam(w http.ResponseWriter, r *http.Request
 		ID:                 teamID,
 		OrgID:              orgID,
 		Name:               req.Name,
-		Column4:            nil,
+		ProfileJsonb:       nil,
 		RateLimitPerMinute: sql.NullInt32{},
 	})
 	if err != nil {
@@ -508,6 +532,10 @@ func (h *controlHandler) handleCreateTeam(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if _, err := tx.Queries.UpsertTeamMembership(ctx, dbquery.UpsertTeamMembershipParams{OrgID: orgID, TeamID: teamID, UserID: claims.UserID}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusConflict, "team membership conflict with mismatched org")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to attach owner to team")
 		return
 	}
@@ -633,6 +661,10 @@ func (h *controlHandler) handleAddTeamMember(w http.ResponseWriter, r *http.Requ
 		TeamID: teamID,
 		UserID: targetUserID,
 	}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusConflict, "team membership conflict with mismatched org")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to upsert team membership")
 		return
 	}
@@ -708,10 +740,18 @@ func (h *controlHandler) handleAddTeamAdminScope(w http.ResponseWriter, r *http.
 		return
 	}
 	if _, err := tx.Queries.UpsertTeamMembership(ctx, dbquery.UpsertTeamMembershipParams{OrgID: orgID, TeamID: teamID, UserID: adminUserID}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusConflict, "team membership conflict with mismatched org")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to attach team admin membership")
 		return
 	}
 	if _, err := tx.Queries.UpsertTeamAdminScope(ctx, dbquery.UpsertTeamAdminScopeParams{OrgID: orgID, TeamID: teamID, AdminUserID: adminUserID}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusConflict, "team admin scope conflict with mismatched org")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to upsert team admin scope")
 		return
 	}
@@ -782,7 +822,11 @@ func (h *controlHandler) handleCreateUserTeamAPIKey(w http.ResponseWriter, r *ht
 		KeyPrefix: keyPrefix,
 	})
 	if err != nil {
-		writeError(w, http.StatusConflict, "active key already exists for org/team/user")
+		if isUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "active key already exists for org/team/user")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to create api key")
 		return
 	}
 
@@ -887,11 +931,7 @@ func (h *controlHandler) handleCreateOrgProviderKey(w http.ResponseWriter, r *ht
 		return
 	}
 
-	secret := os.Getenv("CONTROL_PROVIDER_KEY_SECRET")
-	if secret == "" {
-		secret = "dev-provider-key-secret"
-	}
-	ciphertext, nonce, err := internalcrypto.SealString(secret, req.APIKey)
+	ciphertext, nonce, err := internalcrypto.SealString(h.providerKeySecret, req.APIKey)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to encrypt provider key")
 		return
@@ -1106,7 +1146,7 @@ func (h *controlHandler) setSessionCookie(w http.ResponseWriter, claims auth.Ses
 		Path:     "/v1/control",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   false,
+		Secure:   h.secureCookies,
 		Expires:  expiresAt,
 		MaxAge:   int(sessionTTL.Seconds()),
 	})
@@ -1120,7 +1160,7 @@ func (h *controlHandler) clearSessionCookie(w http.ResponseWriter) {
 		Path:     "/v1/control",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   false,
+		Secure:   h.secureCookies,
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),
 	})
@@ -1313,6 +1353,11 @@ func generateAPIKey() (string, string, error) {
 func hashValue(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func truncateDeviceInfo(input string) string {

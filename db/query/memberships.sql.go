@@ -7,6 +7,7 @@ package dbquery
 
 import (
 	"context"
+	"time"
 )
 
 const addTeamAdminScope = `-- name: AddTeamAdminScope :one
@@ -253,11 +254,19 @@ func (q *Queries) UpsertOrgMembership(ctx context.Context, arg UpsertOrgMembersh
 }
 
 const upsertTeamAdminScope = `-- name: UpsertTeamAdminScope :one
-INSERT INTO team_admin_scopes (org_id, team_id, admin_user_id)
-VALUES ($1, $2, $3)
-ON CONFLICT (team_id, admin_user_id)
-DO UPDATE SET org_id = EXCLUDED.org_id
-RETURNING org_id, team_id, admin_user_id, created_at
+WITH inserted AS (
+    INSERT INTO team_admin_scopes (org_id, team_id, admin_user_id)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (team_id, admin_user_id) DO NOTHING
+    RETURNING org_id, team_id, admin_user_id, created_at
+)
+SELECT org_id, team_id, admin_user_id, created_at
+FROM inserted
+UNION ALL
+SELECT org_id, team_id, admin_user_id, created_at
+FROM team_admin_scopes
+WHERE org_id = $1 AND team_id = $2 AND admin_user_id = $3
+LIMIT 1
 `
 
 type UpsertTeamAdminScopeParams struct {
@@ -266,9 +275,16 @@ type UpsertTeamAdminScopeParams struct {
 	AdminUserID string
 }
 
-func (q *Queries) UpsertTeamAdminScope(ctx context.Context, arg UpsertTeamAdminScopeParams) (TeamAdminScope, error) {
+type UpsertTeamAdminScopeRow struct {
+	OrgID       string
+	TeamID      string
+	AdminUserID string
+	CreatedAt   time.Time
+}
+
+func (q *Queries) UpsertTeamAdminScope(ctx context.Context, arg UpsertTeamAdminScopeParams) (UpsertTeamAdminScopeRow, error) {
 	row := q.db.QueryRowContext(ctx, upsertTeamAdminScope, arg.OrgID, arg.TeamID, arg.AdminUserID)
-	var i TeamAdminScope
+	var i UpsertTeamAdminScopeRow
 	err := row.Scan(
 		&i.OrgID,
 		&i.TeamID,
@@ -279,11 +295,19 @@ func (q *Queries) UpsertTeamAdminScope(ctx context.Context, arg UpsertTeamAdminS
 }
 
 const upsertTeamMembership = `-- name: UpsertTeamMembership :one
-INSERT INTO team_memberships (org_id, team_id, user_id)
-VALUES ($1, $2, $3)
-ON CONFLICT (team_id, user_id)
-DO UPDATE SET org_id = EXCLUDED.org_id
-RETURNING org_id, team_id, user_id, created_at
+WITH inserted AS (
+    INSERT INTO team_memberships (org_id, team_id, user_id)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (team_id, user_id) DO NOTHING
+    RETURNING org_id, team_id, user_id, created_at
+)
+SELECT org_id, team_id, user_id, created_at
+FROM inserted
+UNION ALL
+SELECT org_id, team_id, user_id, created_at
+FROM team_memberships
+WHERE org_id = $1 AND team_id = $2 AND user_id = $3
+LIMIT 1
 `
 
 type UpsertTeamMembershipParams struct {
@@ -292,9 +316,16 @@ type UpsertTeamMembershipParams struct {
 	UserID string
 }
 
-func (q *Queries) UpsertTeamMembership(ctx context.Context, arg UpsertTeamMembershipParams) (TeamMembership, error) {
+type UpsertTeamMembershipRow struct {
+	OrgID     string
+	TeamID    string
+	UserID    string
+	CreatedAt time.Time
+}
+
+func (q *Queries) UpsertTeamMembership(ctx context.Context, arg UpsertTeamMembershipParams) (UpsertTeamMembershipRow, error) {
 	row := q.db.QueryRowContext(ctx, upsertTeamMembership, arg.OrgID, arg.TeamID, arg.UserID)
-	var i TeamMembership
+	var i UpsertTeamMembershipRow
 	err := row.Scan(
 		&i.OrgID,
 		&i.TeamID,

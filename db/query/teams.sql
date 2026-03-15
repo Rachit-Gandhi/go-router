@@ -1,6 +1,6 @@
 -- name: CreateTeam :one
 INSERT INTO teams (id, org_id, name, profile_jsonb, rate_limit_per_minute)
-VALUES ($1, $2, $3, COALESCE($4, '{}'::jsonb), $5)
+VALUES ($1, $2, $3, COALESCE(sqlc.narg(profile_jsonb), '{}'::jsonb), $4)
 RETURNING id, org_id, name, profile_jsonb, rate_limit_per_minute, created_at, updated_at;
 
 -- name: GetTeamByID :one

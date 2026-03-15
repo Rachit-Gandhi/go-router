@@ -18,9 +18,7 @@ func TestOrgSignupAndOwnerCanCreateTeam(t *testing.T) {
 		"name": "core-team",
 	}
 	rec := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs/"+orgID+"/teams", createTeamReq, ownerCookie)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected status %d, got %d", http.StatusCreated, rec.Code)
-	}
+	requireStatus(t, rec, http.StatusCreated)
 
 	var body map[string]any
 	decodeJSON(t, rec, &body)
@@ -43,9 +41,7 @@ func TestMagicLinkExchangeRefreshAndLogout(t *testing.T) {
 		"email":  "owner@example.com",
 	}
 	linkRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/auth/magic-link/request", linkReq, "")
-	if linkRec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, linkRec.Code)
-	}
+	requireStatus(t, linkRec, http.StatusOK)
 
 	var linkBody map[string]any
 	decodeJSON(t, linkRec, &linkBody)
@@ -55,27 +51,21 @@ func TestMagicLinkExchangeRefreshAndLogout(t *testing.T) {
 		"code":          linkBody["code"],
 	}
 	exchangeRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/auth/magic-link/exchange", exchangeReq, "")
-	if exchangeRec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, exchangeRec.Code)
-	}
+	requireStatus(t, exchangeRec, http.StatusOK)
 	authCookie := exchangeRec.Header().Get("Set-Cookie")
 	if authCookie == "" {
 		t.Fatal("expected auth exchange to set cookie")
 	}
 
 	refreshRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/auth/refresh", map[string]any{}, authCookie)
-	if refreshRec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, refreshRec.Code)
-	}
+	requireStatus(t, refreshRec, http.StatusOK)
 	refreshedCookie := refreshRec.Header().Get("Set-Cookie")
 	if refreshedCookie == "" {
 		t.Fatal("expected refresh to rotate cookie")
 	}
 
 	logoutRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/auth/logout", map[string]any{}, refreshedCookie)
-	if logoutRec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, logoutRec.Code)
-	}
+	requireStatus(t, logoutRec, http.StatusOK)
 	if logoutRec.Header().Get("Set-Cookie") == "" {
 		t.Fatal("expected logout to clear cookie")
 	}
@@ -84,9 +74,7 @@ func TestMagicLinkExchangeRefreshAndLogout(t *testing.T) {
 		"name": "post-logout-team",
 	}
 	unauthorizedRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs/"+orgID+"/teams", unauthorizedCreateReq, refreshedCookie)
-	if unauthorizedRec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, unauthorizedRec.Code)
-	}
+	requireStatus(t, unauthorizedRec, http.StatusUnauthorized)
 }
 
 func TestTeamAdminScopeEnforcement(t *testing.T) {
@@ -103,9 +91,7 @@ func TestTeamAdminScopeEnforcement(t *testing.T) {
 		"name":  "Admin User",
 		"role":  "team_admin",
 	}, ownerCookie)
-	if memberRec.Code != http.StatusCreated {
-		t.Fatalf("expected status %d, got %d", http.StatusCreated, memberRec.Code)
-	}
+	requireStatus(t, memberRec, http.StatusCreated)
 	var memberBody map[string]any
 	decodeJSON(t, memberRec, &memberBody)
 	adminUserID, _ := memberBody["user_id"].(string)
@@ -114,17 +100,13 @@ func TestTeamAdminScopeEnforcement(t *testing.T) {
 	}
 
 	scopeRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs/"+orgID+"/teams/"+teamAID+"/admins/"+adminUserID, map[string]any{}, ownerCookie)
-	if scopeRec.Code != http.StatusCreated {
-		t.Fatalf("expected status %d, got %d", http.StatusCreated, scopeRec.Code)
-	}
+	requireStatus(t, scopeRec, http.StatusCreated)
 
 	adminMagicLink := performJSONRequest(t, h, http.MethodPost, "/v1/control/auth/magic-link/request", map[string]any{
 		"org_id": orgID,
 		"email":  "admin@example.com",
 	}, "")
-	if adminMagicLink.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, adminMagicLink.Code)
-	}
+	requireStatus(t, adminMagicLink, http.StatusOK)
 	var adminMagicBody map[string]any
 	decodeJSON(t, adminMagicLink, &adminMagicBody)
 
@@ -132,9 +114,7 @@ func TestTeamAdminScopeEnforcement(t *testing.T) {
 		"magic_link_id": adminMagicBody["magic_link_id"],
 		"code":          adminMagicBody["code"],
 	}, "")
-	if adminExchange.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, adminExchange.Code)
-	}
+	requireStatus(t, adminExchange, http.StatusOK)
 	adminCookie := adminExchange.Header().Get("Set-Cookie")
 	if adminCookie == "" {
 		t.Fatal("expected admin exchange to set cookie")
@@ -144,32 +124,24 @@ func TestTeamAdminScopeEnforcement(t *testing.T) {
 		"email": "member1@example.com",
 		"name":  "Scoped Member",
 	}, adminCookie)
-	if allowedRec.Code != http.StatusCreated {
-		t.Fatalf("expected status %d, got %d", http.StatusCreated, allowedRec.Code)
-	}
+	requireStatus(t, allowedRec, http.StatusCreated)
 
 	deniedRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs/"+orgID+"/teams/"+teamBID+"/members", map[string]any{
 		"email": "member2@example.com",
 		"name":  "Unscoped Member",
 	}, adminCookie)
-	if deniedRec.Code != http.StatusForbidden {
-		t.Fatalf("expected status %d, got %d", http.StatusForbidden, deniedRec.Code)
-	}
+	requireStatus(t, deniedRec, http.StatusForbidden)
 
 	ownerAllowedRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs/"+orgID+"/teams/"+teamBID+"/members", map[string]any{
 		"email": "member3@example.com",
 		"name":  "Owner Managed",
 	}, ownerCookie)
-	if ownerAllowedRec.Code != http.StatusCreated {
-		t.Fatalf("expected status %d, got %d", http.StatusCreated, ownerAllowedRec.Code)
-	}
+	requireStatus(t, ownerAllowedRec, http.StatusCreated)
 
 	adminCreateTeamRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs/"+orgID+"/teams", map[string]any{
 		"name": "forbidden-team-create",
 	}, adminCookie)
-	if adminCreateTeamRec.Code != http.StatusForbidden {
-		t.Fatalf("expected status %d, got %d", http.StatusForbidden, adminCreateTeamRec.Code)
-	}
+	requireStatus(t, adminCreateTeamRec, http.StatusForbidden)
 }
 
 func signupAndAuthenticateOwner(t *testing.T, h http.Handler) (orgID string, ownerUserID string, authCookie string) {
@@ -181,9 +153,7 @@ func signupAndAuthenticateOwner(t *testing.T, h http.Handler) (orgID string, own
 		"owner_name":  "Owner User",
 	}
 	signupRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs", signupReq, "")
-	if signupRec.Code != http.StatusCreated {
-		t.Fatalf("expected status %d, got %d", http.StatusCreated, signupRec.Code)
-	}
+	requireStatus(t, signupRec, http.StatusCreated)
 
 	var signupBody map[string]any
 	decodeJSON(t, signupRec, &signupBody)
@@ -199,9 +169,7 @@ func signupAndAuthenticateOwner(t *testing.T, h http.Handler) (orgID string, own
 		"email":  "owner@example.com",
 	}
 	linkRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/auth/magic-link/request", linkReq, "")
-	if linkRec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, linkRec.Code)
-	}
+	requireStatus(t, linkRec, http.StatusOK)
 
 	var linkBody map[string]any
 	decodeJSON(t, linkRec, &linkBody)
@@ -211,9 +179,7 @@ func signupAndAuthenticateOwner(t *testing.T, h http.Handler) (orgID string, own
 		"code":          linkBody["code"],
 	}
 	exchangeRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/auth/magic-link/exchange", exchangeReq, "")
-	if exchangeRec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, exchangeRec.Code)
-	}
+	requireStatus(t, exchangeRec, http.StatusOK)
 	authCookie = exchangeRec.Header().Get("Set-Cookie")
 	if authCookie == "" {
 		t.Fatal("expected auth cookie from exchange")
@@ -227,9 +193,7 @@ func createTeam(t *testing.T, h http.Handler, orgID, cookie, name string) string
 	rec := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs/"+orgID+"/teams", map[string]any{
 		"name": name,
 	}, cookie)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected status %d, got %d", http.StatusCreated, rec.Code)
-	}
+	requireStatus(t, rec, http.StatusCreated)
 
 	var body map[string]any
 	decodeJSON(t, rec, &body)
@@ -265,5 +229,12 @@ func decodeJSON(t *testing.T, rec *httptest.ResponseRecorder, out any) {
 
 	if err := json.Unmarshal(rec.Body.Bytes(), out); err != nil {
 		t.Fatalf("decode JSON response: %v (%s)", err, rec.Body.String())
+	}
+}
+
+func requireStatus(t *testing.T, rec *httptest.ResponseRecorder, expected int) {
+	t.Helper()
+	if rec.Code != expected {
+		t.Fatalf("expected status %d, got %d: %s", expected, rec.Code, rec.Body.String())
 	}
 }

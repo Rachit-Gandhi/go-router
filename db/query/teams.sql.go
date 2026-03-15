@@ -12,7 +12,7 @@ import (
 
 const createTeam = `-- name: CreateTeam :one
 INSERT INTO teams (id, org_id, name, profile_jsonb, rate_limit_per_minute)
-VALUES ($1, $2, $3, COALESCE($4, '{}'::jsonb), $5)
+VALUES ($1, $2, $3, COALESCE($5, '{}'::jsonb), $4)
 RETURNING id, org_id, name, profile_jsonb, rate_limit_per_minute, created_at, updated_at
 `
 
@@ -20,8 +20,8 @@ type CreateTeamParams struct {
 	ID                 string
 	OrgID              string
 	Name               string
-	Column4            interface{}
 	RateLimitPerMinute sql.NullInt32
+	ProfileJsonb       interface{}
 }
 
 func (q *Queries) CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error) {
@@ -29,8 +29,8 @@ func (q *Queries) CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, e
 		arg.ID,
 		arg.OrgID,
 		arg.Name,
-		arg.Column4,
 		arg.RateLimitPerMinute,
+		arg.ProfileJsonb,
 	)
 	var i Team
 	err := row.Scan(

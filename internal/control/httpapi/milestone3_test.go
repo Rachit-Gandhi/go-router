@@ -79,6 +79,25 @@ func TestRevokeAPIKeyDisablesIdentityLookup(t *testing.T) {
 	}
 }
 
+func TestCreateAPIKeyReturnsConflictWhenActiveKeyExists(t *testing.T) {
+	tc := newTestHandler(t)
+	h := tc.handler
+
+	orgID, _, ownerCookie := signupAndAuthenticateOwner(t, h)
+	teamID := createTeam(t, h, orgID, ownerCookie, "duplicate-key-team")
+	memberUserID := addMemberByEmail(t, h, orgID, teamID, ownerCookie, "dup-key@example.com", "Duplicate Key Member", "")
+
+	firstCreateRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs/"+orgID+"/teams/"+teamID+"/users/"+memberUserID+"/api-keys", map[string]any{}, ownerCookie)
+	if firstCreateRec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, firstCreateRec.Code)
+	}
+
+	secondCreateRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs/"+orgID+"/teams/"+teamID+"/users/"+memberUserID+"/api-keys", map[string]any{}, ownerCookie)
+	if secondCreateRec.Code != http.StatusConflict {
+		t.Fatalf("expected status %d, got %d", http.StatusConflict, secondCreateRec.Code)
+	}
+}
+
 func TestProviderKeyStoredEncryptedAndTeamPolicyReduceOnly(t *testing.T) {
 	tc := newTestHandler(t)
 	h := tc.handler
