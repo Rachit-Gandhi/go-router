@@ -5,11 +5,157 @@
 package dbquery
 
 import (
+	"database/sql"
+	"encoding/json"
 	"time"
 )
+
+type AuthMagicLink struct {
+	ID         string
+	OrgID      string
+	Email      string
+	CodeHash   string
+	ExpiresAt  time.Time
+	ConsumedAt sql.NullTime
+	CreatedAt  time.Time
+}
+
+type AuthRefreshToken struct {
+	ID         string
+	OrgID      string
+	UserID     string
+	TokenHash  string
+	SessionID  string
+	DeviceInfo sql.NullString
+	ExpiresAt  time.Time
+	RevokedAt  sql.NullTime
+	LastUsedAt time.Time
+	CreatedAt  time.Time
+}
 
 type HealthCheck struct {
 	ID        int64
 	Service   string
 	CheckedAt time.Time
+}
+
+type Org struct {
+	ID          string
+	Name        string
+	OwnerUserID string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type OrgMembership struct {
+	OrgID     string
+	UserID    string
+	Role      string
+	CreatedAt time.Time
+}
+
+type OrgModelPolicy struct {
+	OrgID     string
+	Provider  string
+	Model     string
+	IsAllowed bool
+	CreatedAt time.Time
+}
+
+type OrgProviderKey struct {
+	ID            string
+	OrgID         string
+	Provider      string
+	KeyCiphertext []byte
+	KeyNonce      []byte
+	KeyKekID      string
+	IsActive      bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type Team struct {
+	ID                 string
+	OrgID              string
+	Name               string
+	ProfileJsonb       json.RawMessage
+	RateLimitPerMinute sql.NullInt32
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type TeamAdminScope struct {
+	OrgID       string
+	TeamID      string
+	AdminUserID string
+	CreatedAt   time.Time
+}
+
+type TeamMembership struct {
+	OrgID     string
+	TeamID    string
+	UserID    string
+	CreatedAt time.Time
+}
+
+type TeamModelPolicy struct {
+	OrgID     string
+	TeamID    string
+	Provider  string
+	Model     string
+	IsAllowed bool
+	CreatedAt time.Time
+}
+
+type UsageLog struct {
+	ID                 int64
+	OrgID              string
+	TeamID             string
+	UserID             string
+	ApiKeyID           string
+	Provider           string
+	Model              string
+	RequestTokens      int32
+	ResponseTokens     int32
+	LatencyMs          int32
+	StatusCode         int32
+	RequestFingerprint sql.NullString
+	CreatedAt          time.Time
+}
+
+type UsageLogsDefault struct {
+	ID                 int64
+	OrgID              string
+	TeamID             string
+	UserID             string
+	ApiKeyID           string
+	Provider           string
+	Model              string
+	RequestTokens      int32
+	ResponseTokens     int32
+	LatencyMs          int32
+	StatusCode         int32
+	RequestFingerprint sql.NullString
+	CreatedAt          time.Time
+}
+
+type User struct {
+	ID        string
+	Email     string
+	Name      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type UserTeamApiKey struct {
+	ID         string
+	OrgID      string
+	TeamID     string
+	UserID     string
+	KeyHash    string
+	KeyPrefix  string
+	RevokedAt  sql.NullTime
+	IsActive   bool
+	LastUsedAt sql.NullTime
+	CreatedAt  time.Time
 }
