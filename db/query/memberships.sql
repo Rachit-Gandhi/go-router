@@ -10,6 +10,20 @@ SELECT org_id, user_id, role, created_at
 FROM org_memberships
 WHERE org_id = $1 AND user_id = $2;
 
+-- name: ListOrgMembershipsByUser :many
+SELECT org_id, user_id, role, created_at
+FROM org_memberships
+WHERE user_id = $1
+ORDER BY
+    CASE role
+        WHEN 'org_owner' THEN 1
+        WHEN 'team_admin' THEN 2
+        ELSE 3
+    END,
+    created_at ASC,
+    org_id ASC
+LIMIT $2;
+
 -- name: ListOrgMembershipsByOrg :many
 SELECT org_id, user_id, role, created_at
 FROM org_memberships

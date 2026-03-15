@@ -3,6 +3,16 @@ INSERT INTO auth_magic_links (id, org_id, email, code_hash, expires_at)
 VALUES ($1, $2, $3, $4, $5)
 RETURNING id, org_id, email, code_hash, expires_at, consumed_at, created_at;
 
+-- name: CreateAuthLogin :one
+INSERT INTO auth_logins (id, magic_link_id, org_id, user_id, role, email)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, magic_link_id, org_id, user_id, role, email, created_at;
+
+-- name: GetAuthLoginByMagicLinkID :one
+SELECT id, magic_link_id, org_id, user_id, role, email, created_at
+FROM auth_logins
+WHERE magic_link_id = $1;
+
 -- name: ConsumeMagicLink :one
 UPDATE auth_magic_links
 SET consumed_at = NOW()

@@ -45,15 +45,42 @@ func newTestHandler(t *testing.T) *testControlHandler {
 	if err != nil {
 		t.Fatalf("new session codec: %v", err)
 	}
+	mailer := newTestMagicLinkSender()
 	return &testControlHandler{
 		db:      db,
-		handler: NewHandlerWithDB(db, codec, "test-provider-key-secret", false, time.Now),
+		handler: NewHandlerWithDBAndSender(db, codec, "test-provider-key-secret", false, time.Now, mailer),
+		mailer:  mailer,
+		codec:   codec,
 	}
 }
 
 type testControlHandler struct {
 	db      *sql.DB
 	handler http.Handler
+	mailer  *testMagicLinkSender
+	codec   *auth.SessionCodec
+}
+
+type testMagicLinkSender struct {
+	mu                 sync.Mutex
+	codesByMagicLinkID map[string]string
+}
+
+func newTestMagicLinkSender() *testMagicLinkSender {
+	return &testMagicLinkSender{codesByMagicLinkID: map[string]string{}}
+}
+
+func (m *testMagicLinkSender) SendMagicLink(_ context.Context, msg MagicLinkMessage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.codesByMagicLinkID[msg.MagicLinkID] = msg.Code
+	return nil
+}
+
+func (m *testMagicLinkSender) CodeForMagicLink(magicLinkID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.codesByMagicLinkID[magicLinkID]
 }
 
 func ensurePostgres(t *testing.T) *sql.DB {

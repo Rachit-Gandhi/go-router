@@ -65,6 +65,43 @@ func (q *Queries) ConsumeMagicLinkByCode(ctx context.Context, arg ConsumeMagicLi
 	return i, err
 }
 
+const createAuthLogin = `-- name: CreateAuthLogin :one
+INSERT INTO auth_logins (id, magic_link_id, org_id, user_id, role, email)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, magic_link_id, org_id, user_id, role, email, created_at
+`
+
+type CreateAuthLoginParams struct {
+	ID          string
+	MagicLinkID string
+	OrgID       string
+	UserID      string
+	Role        string
+	Email       string
+}
+
+func (q *Queries) CreateAuthLogin(ctx context.Context, arg CreateAuthLoginParams) (AuthLogin, error) {
+	row := q.db.QueryRowContext(ctx, createAuthLogin,
+		arg.ID,
+		arg.MagicLinkID,
+		arg.OrgID,
+		arg.UserID,
+		arg.Role,
+		arg.Email,
+	)
+	var i AuthLogin
+	err := row.Scan(
+		&i.ID,
+		&i.MagicLinkID,
+		&i.OrgID,
+		&i.UserID,
+		&i.Role,
+		&i.Email,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createMagicLink = `-- name: CreateMagicLink :one
 INSERT INTO auth_magic_links (id, org_id, email, code_hash, expires_at)
 VALUES ($1, $2, $3, $4, $5)
@@ -137,6 +174,27 @@ func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshToken
 		&i.ExpiresAt,
 		&i.RevokedAt,
 		&i.LastUsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getAuthLoginByMagicLinkID = `-- name: GetAuthLoginByMagicLinkID :one
+SELECT id, magic_link_id, org_id, user_id, role, email, created_at
+FROM auth_logins
+WHERE magic_link_id = $1
+`
+
+func (q *Queries) GetAuthLoginByMagicLinkID(ctx context.Context, magicLinkID string) (AuthLogin, error) {
+	row := q.db.QueryRowContext(ctx, getAuthLoginByMagicLinkID, magicLinkID)
+	var i AuthLogin
+	err := row.Scan(
+		&i.ID,
+		&i.MagicLinkID,
+		&i.OrgID,
+		&i.UserID,
+		&i.Role,
+		&i.Email,
 		&i.CreatedAt,
 	)
 	return i, err
