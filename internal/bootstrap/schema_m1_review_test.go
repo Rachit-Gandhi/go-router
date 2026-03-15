@@ -224,7 +224,7 @@ func TestCreateTeamCoalescesProfileJSONB(t *testing.T) {
 		t.Fatalf("expected query file at %s: %v", queryPath, err)
 	}
 
-	if !strings.Contains(string(content), "COALESCE($4, '{}'::jsonb)") {
+	if !strings.Contains(string(content), "COALESCE(sqlc.narg(profile_jsonb), '{}'::jsonb)") {
 		t.Fatal("expected CreateTeam to coalesce profile_jsonb parameter")
 	}
 }

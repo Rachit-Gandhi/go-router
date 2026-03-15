@@ -8,6 +8,11 @@ SELECT id, email, name, created_at, updated_at
 FROM users
 WHERE email = $1;
 
+-- name: GetUserByID :one
+SELECT id, email, name, created_at, updated_at
+FROM users
+WHERE id = $1;
+
 -- name: CreateOrg :one
 INSERT INTO orgs (id, name, owner_user_id)
 VALUES ($1, $2, $3)

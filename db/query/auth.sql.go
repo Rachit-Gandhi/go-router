@@ -35,6 +35,36 @@ func (q *Queries) ConsumeMagicLink(ctx context.Context, id string) (AuthMagicLin
 	return i, err
 }
 
+const consumeMagicLinkByCode = `-- name: ConsumeMagicLinkByCode :one
+UPDATE auth_magic_links
+SET consumed_at = NOW()
+WHERE id = $1
+  AND code_hash = $2
+  AND consumed_at IS NULL
+  AND expires_at > NOW()
+RETURNING id, org_id, email, code_hash, expires_at, consumed_at, created_at
+`
+
+type ConsumeMagicLinkByCodeParams struct {
+	ID       string
+	CodeHash string
+}
+
+func (q *Queries) ConsumeMagicLinkByCode(ctx context.Context, arg ConsumeMagicLinkByCodeParams) (AuthMagicLink, error) {
+	row := q.db.QueryRowContext(ctx, consumeMagicLinkByCode, arg.ID, arg.CodeHash)
+	var i AuthMagicLink
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.Email,
+		&i.CodeHash,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createMagicLink = `-- name: CreateMagicLink :one
 INSERT INTO auth_magic_links (id, org_id, email, code_hash, expires_at)
 VALUES ($1, $2, $3, $4, $5)

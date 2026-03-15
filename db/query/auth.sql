@@ -11,6 +11,15 @@ WHERE id = $1
   AND expires_at > NOW()
 RETURNING id, org_id, email, code_hash, expires_at, consumed_at, created_at;
 
+-- name: ConsumeMagicLinkByCode :one
+UPDATE auth_magic_links
+SET consumed_at = NOW()
+WHERE id = $1
+  AND code_hash = $2
+  AND consumed_at IS NULL
+  AND expires_at > NOW()
+RETURNING id, org_id, email, code_hash, expires_at, consumed_at, created_at;
+
 -- name: CreateRefreshToken :one
 INSERT INTO auth_refresh_tokens (id, org_id, user_id, token_hash, session_id, device_info, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
