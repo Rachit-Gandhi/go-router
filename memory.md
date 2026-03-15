@@ -44,6 +44,7 @@
 
 ## Commit Journal
 <!-- COMMIT_JOURNAL_START -->
+- 2026-03-15T19:15:53+05:30 2a3b008: Resolve follow-up CodeRabbit review comments [files: internal/control/httpapi/read_endpoints.go,internal/control/httpapi/read_endpoints_test.go,internal/control/httpapi/visibility_test.go,internal/router/httpapi/handler.go,internal/router/httpapi/milestone4_test.go]
 - 2026-03-15T18:40:14+05:30 d3f01cc: Resolve CodeRabbit review findings for router and visibility endpoints [files: db/migrations/000004_usage_logs_partition_maintenance.sql,internal/control/httpapi/read_endpoints.go,internal/control/httpapi/read_endpoints_test.go,internal/control/httpapi/visibility_test.go,internal/router/httpapi/handler.go,internal/router/httpapi/handler_test.go,internal/router/httpapi/milestone4_test.go,internal/router/httpapi/postgres_test.go]
 - 2026-03-15T18:24:56+05:30 b7f3672: Implement control-plane visibility read endpoints [files: internal/control/httpapi/handler.go,internal/control/httpapi/read_endpoints.go,internal/control/httpapi/visibility_test.go]
 - 2026-03-15T17:53:19+05:30 b50bbdd: Implement Milestone 4 router chat completions with policy-aware routing [files: cmd/router/main.go,internal/router/httpapi/handler.go,internal/router/httpapi/handler_test.go,internal/router/httpapi/milestone4_test.go,internal/router/httpapi/postgres_test.go]

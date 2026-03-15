@@ -63,7 +63,7 @@ func TestVisibilityEndpoints(t *testing.T) {
 		_, err := queries.CreateUsageLog(t.Context(), dbquery.CreateUsageLogParams{
 			OrgID:              orgID,
 			TeamID:             teamID,
-			UserID:             ownerUserID,
+			UserID:             memberUserID,
 			ApiKeyID:           apiKeyID,
 			Provider:           "openai",
 			Model:              "gpt-4o-mini",

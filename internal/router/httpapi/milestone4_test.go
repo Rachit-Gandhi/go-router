@@ -154,6 +154,56 @@ func TestChatCompletionsComplexityRoutingSelectsFastAndStrongModels(t *testing.T
 	}
 }
 
+func TestChatCompletionsAutoSkipsModelsWithoutConfiguredAdapters(t *testing.T) {
+	tr := newTestRouterHandler(t)
+	fixture := seedRouterFixture(t, tr.db,
+		[]modelPolicy{
+			{Provider: "mistral", Model: "mistral-small", Allowed: true},
+			{Provider: "openai", Model: "gpt-4o", Allowed: true},
+		},
+		nil,
+	)
+
+	rec := performRouterChatRequest(t, tr.handler, fixture.PlaintextKey, map[string]any{
+		"model": "auto",
+		"messages": []map[string]any{
+			{"role": "user", "content": "pick a model with configured adapter"},
+		},
+	})
+	requireStatus(t, rec, http.StatusOK)
+
+	var body map[string]any
+	decodeJSONResponse(t, rec, &body)
+	if body["model"] != "gpt-4o" {
+		t.Fatalf("expected auto selection to skip unsupported provider and choose gpt-4o, got %#v", body["model"])
+	}
+}
+
+func TestChatCompletionsExplicitUnsupportedProviderReturnsBadGateway(t *testing.T) {
+	tr := newTestRouterHandler(t)
+	fixture := seedRouterFixture(t, tr.db,
+		[]modelPolicy{
+			{Provider: "mistral", Model: "mistral-small", Allowed: true},
+			{Provider: "openai", Model: "gpt-4o", Allowed: true},
+		},
+		nil,
+	)
+
+	rec := performRouterChatRequest(t, tr.handler, fixture.PlaintextKey, map[string]any{
+		"model": "mistral-small",
+		"messages": []map[string]any{
+			{"role": "user", "content": "explicit model should keep provider and fail without adapter"},
+		},
+	})
+	requireStatus(t, rec, http.StatusBadGateway)
+
+	var body map[string]any
+	decodeJSONResponse(t, rec, &body)
+	if body["error"] != "provider adapter not configured" {
+		t.Fatalf("expected explicit unsupported provider to return adapter error, got %#v", body["error"])
+	}
+}
+
 func TestChatCompletionsRejectsInvalidAPIKey(t *testing.T) {
 	tr := newTestRouterHandler(t)
 	_ = seedRouterFixture(t, tr.db,

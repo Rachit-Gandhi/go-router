@@ -216,7 +216,16 @@ func (h *routerHandler) handleChatCompletions(w http.ResponseWriter, r *http.Req
 		allowed = append(allowed, allowedModel{Provider: row.Provider, Model: row.Model})
 	}
 
-	selected, err := selectModel(req, allowed)
+	selectableModels := allowed
+	if isAutoModelSelection(req.Model) {
+		selectableModels = filterModelsByConfiguredAdapters(allowed, h.adapters)
+		if len(selectableModels) == 0 && len(allowed) > 0 {
+			writeError(w, http.StatusBadGateway, "provider adapter not configured")
+			return
+		}
+	}
+
+	selected, err := selectModel(req, selectableModels)
 	if err != nil {
 		writeError(w, http.StatusForbidden, policyDeniedErrorMessage)
 		return
@@ -304,7 +313,7 @@ func selectModel(req chatCompletionsRequest, allowed []allowedModel) (allowedMod
 	}
 
 	requested := strings.TrimSpace(req.Model)
-	if requested != "" && !strings.EqualFold(requested, "auto") {
+	if !isAutoModelSelection(req.Model) {
 		for _, candidate := range allowed {
 			if candidate.Model == requested {
 				return candidate, nil
@@ -333,6 +342,21 @@ func selectModel(req chatCompletionsRequest, allowed []allowedModel) (allowedMod
 		}
 	}
 	return allowed[len(allowed)-1], nil
+}
+
+func isAutoModelSelection(model string) bool {
+	trimmed := strings.TrimSpace(model)
+	return trimmed == "" || strings.EqualFold(trimmed, "auto")
+}
+
+func filterModelsByConfiguredAdapters(allowed []allowedModel, adapters map[string]completionAdapter) []allowedModel {
+	filtered := make([]allowedModel, 0, len(allowed))
+	for _, candidate := range allowed {
+		if _, ok := adapters[candidate.Provider]; ok {
+			filtered = append(filtered, candidate)
+		}
+	}
+	return filtered
 }
 
 func isFastTierModel(model string) bool {

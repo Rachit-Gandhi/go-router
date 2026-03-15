@@ -18,6 +18,7 @@ import (
 const (
 	defaultPageLimit = 50
 	maxPageLimit     = 200
+	maxUsageWindow   = 90 * 24 * time.Hour
 )
 
 func (h *controlHandler) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -1103,6 +1104,10 @@ func parseTimeRange(w http.ResponseWriter, r *http.Request, now time.Time) (time
 
 	if !from.Before(to) {
 		writeError(w, http.StatusBadRequest, "from must be before to")
+		return time.Time{}, time.Time{}, false
+	}
+	if to.Sub(from) > maxUsageWindow {
+		writeError(w, http.StatusBadRequest, "time range exceeds 90 days")
 		return time.Time{}, time.Time{}, false
 	}
 	return from, to, true
