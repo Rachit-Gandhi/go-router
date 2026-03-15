@@ -17,9 +17,15 @@ func main() {
 	addr := config.EnvOrDefault("ROUTER_ADDR", ":8081")
 	log.Printf("router listening on %s", addr)
 
+	handler, db, err := httpapi.NewHandlerWithPostgresFromEnv(time.Now)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: httpapi.NewHandler(),
+		Handler: handler,
 	}
 
 	signalCh := make(chan os.Signal, 1)

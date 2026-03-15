@@ -1,5 +1,6 @@
 -- +goose Up
 -- Partition maintenance: pre-create current and next month partitions for usage_logs.
+-- +goose StatementBegin
 DO $$
 DECLARE
     current_month DATE := date_trunc('month', NOW())::date;
@@ -20,8 +21,10 @@ BEGIN
     );
 END
 $$;
+-- +goose StatementEnd
 
 -- +goose Down
+-- +goose StatementBegin
 DO $$
 DECLARE
     partition_name TEXT;
@@ -38,3 +41,4 @@ BEGIN
     END LOOP;
 END
 $$;
+-- +goose StatementEnd
