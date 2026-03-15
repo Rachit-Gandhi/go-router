@@ -4,7 +4,7 @@ import "regexp"
 
 var (
 	bearerTokenPattern = regexp.MustCompile(`(?i)(authorization\s*:\s*bearer\s+)([^\s",]+)`)
-	jsonSecretPattern  = regexp.MustCompile(`(?i)("(?:api_key|token|refresh_token|password|secret|authorization)"\s*:\s*")([^"]*)(")`)
+	jsonSecretPattern  = regexp.MustCompile(`(?i)("(?:api_key|token|refresh_token|password|secret|authorization)"\s*:\s*")((?:\\.|[^"\\])*)(")`)
 	querySecretPattern = regexp.MustCompile(`(?i)(\b(?:api_key|token|refresh_token|password|secret|authorization)=)([^&\s]+)`)
 	kvSecretPattern    = regexp.MustCompile(`(?i)(\b(?:api_key|token|refresh_token|password|secret)\s*:\s*)([^\s,]+)`)
 )

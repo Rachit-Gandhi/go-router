@@ -29,3 +29,15 @@ func TestRedactSecretsRedactsSensitiveQueryParams(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactSecretsHandlesEscapedQuotesInJSON(t *testing.T) {
+	input := `{"password":"abc\\\"def"}`
+	redacted := RedactSecrets(input)
+
+	if redacted != `{"password":"[REDACTED]"}` {
+		t.Fatalf("expected fully redacted JSON secret, got %q", redacted)
+	}
+	if strings.Contains(redacted, `abc\\\"def`) || strings.Contains(redacted, "abc") || strings.Contains(redacted, "def") {
+		t.Fatalf("expected escaped-quote secret material to be redacted, got %q", redacted)
+	}
+}

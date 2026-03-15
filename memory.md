@@ -44,6 +44,7 @@
 
 ## Commit Journal
 <!-- COMMIT_JOURNAL_START -->
+- 2026-03-15T21:11:10+05:30 d94b48b: Address CodeRabbit follow-ups for redaction and fingerprinting [files: internal/httputil/redact.go,internal/httputil/redact_test.go,internal/router/httpapi/handler.go,internal/router/httpapi/handler_test.go]
 - 2026-03-15T19:45:18+05:30 952bd71: Implement milestone 5 usage logging and hardening [files: internal/httputil/redact.go,internal/httputil/redact_test.go,internal/router/httpapi/handler.go,internal/router/httpapi/milestone4_test.go,internal/router/httpapi/postgres_test.go]
 - 2026-03-15T19:15:53+05:30 2a3b008: Resolve follow-up CodeRabbit review comments [files: internal/control/httpapi/read_endpoints.go,internal/control/httpapi/read_endpoints_test.go,internal/control/httpapi/visibility_test.go,internal/router/httpapi/handler.go,internal/router/httpapi/milestone4_test.go]
 - 2026-03-15T18:40:14+05:30 d3f01cc: Resolve CodeRabbit review findings for router and visibility endpoints [files: db/migrations/000004_usage_logs_partition_maintenance.sql,internal/control/httpapi/read_endpoints.go,internal/control/httpapi/read_endpoints_test.go,internal/control/httpapi/visibility_test.go,internal/router/httpapi/handler.go,internal/router/httpapi/handler_test.go,internal/router/httpapi/milestone4_test.go,internal/router/httpapi/postgres_test.go]

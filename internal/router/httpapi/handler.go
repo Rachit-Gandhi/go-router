@@ -454,15 +454,21 @@ func (h *routerHandler) persistUsageLog(
 }
 
 func requestFingerprint(req chatCompletionsRequest) string {
-	var b strings.Builder
-	b.WriteString(strings.TrimSpace(req.Model))
-	for _, msg := range req.Messages {
-		b.WriteString("|")
-		b.WriteString(strings.TrimSpace(msg.Role))
-		b.WriteString(":")
-		b.WriteString(strings.TrimSpace(msg.Content))
+	normalized := chatCompletionsRequest{
+		Model:    strings.TrimSpace(req.Model),
+		Messages: make([]chatMessage, len(req.Messages)),
 	}
-	return hashValue(b.String())
+	for i, msg := range req.Messages {
+		normalized.Messages[i] = chatMessage{
+			Role:    strings.TrimSpace(msg.Role),
+			Content: strings.TrimSpace(msg.Content),
+		}
+	}
+	payload, err := json.Marshal(normalized)
+	if err != nil {
+		return hashValue(normalized.Model)
+	}
+	return hashBytes(payload)
 }
 
 func clampIntToInt32(value int64) int32 {
@@ -508,6 +514,11 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func hashValue(value string) string {
 	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func hashBytes(value []byte) string {
+	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:])
 }
 
