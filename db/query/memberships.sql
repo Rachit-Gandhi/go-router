@@ -33,4 +33,5 @@ RETURNING org_id, team_id, admin_user_id, created_at;
 SELECT org_id, team_id, admin_user_id, created_at
 FROM team_admin_scopes
 WHERE org_id = $1 AND admin_user_id = $2
-ORDER BY created_at DESC;
+ORDER BY created_at DESC
+LIMIT $3;

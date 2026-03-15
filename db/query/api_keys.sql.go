@@ -7,12 +7,14 @@ package dbquery
 
 import (
 	"context"
+	"database/sql"
+	"time"
 )
 
 const createUserTeamAPIKey = `-- name: CreateUserTeamAPIKey :one
 INSERT INTO user_team_api_keys (id, org_id, team_id, user_id, key_hash, key_prefix, is_active)
 VALUES ($1, $2, $3, $4, $5, $6, TRUE)
-RETURNING id, org_id, team_id, user_id, key_hash, key_prefix, revoked_at, is_active, last_used_at, created_at
+RETURNING id, org_id, team_id, user_id, key_prefix, revoked_at, is_active, last_used_at, created_at
 `
 
 type CreateUserTeamAPIKeyParams struct {
@@ -24,7 +26,19 @@ type CreateUserTeamAPIKeyParams struct {
 	KeyPrefix string
 }
 
-func (q *Queries) CreateUserTeamAPIKey(ctx context.Context, arg CreateUserTeamAPIKeyParams) (UserTeamApiKey, error) {
+type CreateUserTeamAPIKeyRow struct {
+	ID         string
+	OrgID      string
+	TeamID     string
+	UserID     string
+	KeyPrefix  string
+	RevokedAt  sql.NullTime
+	IsActive   bool
+	LastUsedAt sql.NullTime
+	CreatedAt  time.Time
+}
+
+func (q *Queries) CreateUserTeamAPIKey(ctx context.Context, arg CreateUserTeamAPIKeyParams) (CreateUserTeamAPIKeyRow, error) {
 	row := q.db.QueryRowContext(ctx, createUserTeamAPIKey,
 		arg.ID,
 		arg.OrgID,
@@ -33,13 +47,12 @@ func (q *Queries) CreateUserTeamAPIKey(ctx context.Context, arg CreateUserTeamAP
 		arg.KeyHash,
 		arg.KeyPrefix,
 	)
-	var i UserTeamApiKey
+	var i CreateUserTeamAPIKeyRow
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
 		&i.TeamID,
 		&i.UserID,
-		&i.KeyHash,
 		&i.KeyPrefix,
 		&i.RevokedAt,
 		&i.IsActive,
@@ -50,22 +63,33 @@ func (q *Queries) CreateUserTeamAPIKey(ctx context.Context, arg CreateUserTeamAP
 }
 
 const getActiveUserTeamAPIKeyByHash = `-- name: GetActiveUserTeamAPIKeyByHash :one
-SELECT id, org_id, team_id, user_id, key_hash, key_prefix, revoked_at, is_active, last_used_at, created_at
+SELECT id, org_id, team_id, user_id, key_prefix, revoked_at, is_active, last_used_at, created_at
 FROM user_team_api_keys
 WHERE key_hash = $1
   AND is_active = TRUE
   AND revoked_at IS NULL
 `
 
-func (q *Queries) GetActiveUserTeamAPIKeyByHash(ctx context.Context, keyHash string) (UserTeamApiKey, error) {
+type GetActiveUserTeamAPIKeyByHashRow struct {
+	ID         string
+	OrgID      string
+	TeamID     string
+	UserID     string
+	KeyPrefix  string
+	RevokedAt  sql.NullTime
+	IsActive   bool
+	LastUsedAt sql.NullTime
+	CreatedAt  time.Time
+}
+
+func (q *Queries) GetActiveUserTeamAPIKeyByHash(ctx context.Context, keyHash string) (GetActiveUserTeamAPIKeyByHashRow, error) {
 	row := q.db.QueryRowContext(ctx, getActiveUserTeamAPIKeyByHash, keyHash)
-	var i UserTeamApiKey
+	var i GetActiveUserTeamAPIKeyByHashRow
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
 		&i.TeamID,
 		&i.UserID,
-		&i.KeyHash,
 		&i.KeyPrefix,
 		&i.RevokedAt,
 		&i.IsActive,
@@ -76,7 +100,7 @@ func (q *Queries) GetActiveUserTeamAPIKeyByHash(ctx context.Context, keyHash str
 }
 
 const listUserTeamAPIKeys = `-- name: ListUserTeamAPIKeys :many
-SELECT id, org_id, team_id, user_id, key_hash, key_prefix, revoked_at, is_active, last_used_at, created_at
+SELECT id, org_id, team_id, user_id, key_prefix, revoked_at, is_active, last_used_at, created_at
 FROM user_team_api_keys
 WHERE org_id = $1 AND team_id = $2 AND user_id = $3
 ORDER BY created_at DESC
@@ -88,21 +112,32 @@ type ListUserTeamAPIKeysParams struct {
 	UserID string
 }
 
-func (q *Queries) ListUserTeamAPIKeys(ctx context.Context, arg ListUserTeamAPIKeysParams) ([]UserTeamApiKey, error) {
+type ListUserTeamAPIKeysRow struct {
+	ID         string
+	OrgID      string
+	TeamID     string
+	UserID     string
+	KeyPrefix  string
+	RevokedAt  sql.NullTime
+	IsActive   bool
+	LastUsedAt sql.NullTime
+	CreatedAt  time.Time
+}
+
+func (q *Queries) ListUserTeamAPIKeys(ctx context.Context, arg ListUserTeamAPIKeysParams) ([]ListUserTeamAPIKeysRow, error) {
 	rows, err := q.db.QueryContext(ctx, listUserTeamAPIKeys, arg.OrgID, arg.TeamID, arg.UserID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []UserTeamApiKey
+	var items []ListUserTeamAPIKeysRow
 	for rows.Next() {
-		var i UserTeamApiKey
+		var i ListUserTeamAPIKeysRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.OrgID,
 			&i.TeamID,
 			&i.UserID,
-			&i.KeyHash,
 			&i.KeyPrefix,
 			&i.RevokedAt,
 			&i.IsActive,

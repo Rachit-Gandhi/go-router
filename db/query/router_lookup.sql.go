@@ -7,6 +7,8 @@ package dbquery
 
 import (
 	"context"
+	"database/sql"
+	"time"
 )
 
 const listEffectiveAllowedModels = `-- name: ListEffectiveAllowedModels :many
@@ -57,22 +59,33 @@ func (q *Queries) ListEffectiveAllowedModels(ctx context.Context, arg ListEffect
 }
 
 const resolveIdentityByAPIKeyHash = `-- name: ResolveIdentityByAPIKeyHash :one
-SELECT id, org_id, team_id, user_id, key_hash, key_prefix, revoked_at, is_active, last_used_at, created_at
+SELECT id, org_id, team_id, user_id, key_prefix, revoked_at, is_active, last_used_at, created_at
 FROM user_team_api_keys
 WHERE key_hash = $1
   AND is_active = TRUE
   AND revoked_at IS NULL
 `
 
-func (q *Queries) ResolveIdentityByAPIKeyHash(ctx context.Context, keyHash string) (UserTeamApiKey, error) {
+type ResolveIdentityByAPIKeyHashRow struct {
+	ID         string
+	OrgID      string
+	TeamID     string
+	UserID     string
+	KeyPrefix  string
+	RevokedAt  sql.NullTime
+	IsActive   bool
+	LastUsedAt sql.NullTime
+	CreatedAt  time.Time
+}
+
+func (q *Queries) ResolveIdentityByAPIKeyHash(ctx context.Context, keyHash string) (ResolveIdentityByAPIKeyHashRow, error) {
 	row := q.db.QueryRowContext(ctx, resolveIdentityByAPIKeyHash, keyHash)
-	var i UserTeamApiKey
+	var i ResolveIdentityByAPIKeyHashRow
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
 		&i.TeamID,
 		&i.UserID,
-		&i.KeyHash,
 		&i.KeyPrefix,
 		&i.RevokedAt,
 		&i.IsActive,

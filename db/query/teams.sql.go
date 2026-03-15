@@ -8,12 +8,11 @@ package dbquery
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 )
 
 const createTeam = `-- name: CreateTeam :one
 INSERT INTO teams (id, org_id, name, profile_jsonb, rate_limit_per_minute)
-VALUES ($1, $2, $3, $4, $5)
+VALUES ($1, $2, $3, COALESCE($4, '{}'::jsonb), $5)
 RETURNING id, org_id, name, profile_jsonb, rate_limit_per_minute, created_at, updated_at
 `
 
@@ -21,7 +20,7 @@ type CreateTeamParams struct {
 	ID                 string
 	OrgID              string
 	Name               string
-	ProfileJsonb       json.RawMessage
+	Column4            interface{}
 	RateLimitPerMinute sql.NullInt32
 }
 
@@ -30,7 +29,7 @@ func (q *Queries) CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, e
 		arg.ID,
 		arg.OrgID,
 		arg.Name,
-		arg.ProfileJsonb,
+		arg.Column4,
 		arg.RateLimitPerMinute,
 	)
 	var i Team

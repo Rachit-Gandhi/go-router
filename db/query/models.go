@@ -123,6 +123,22 @@ type UsageLog struct {
 	CreatedAt          time.Time
 }
 
+type UsageLogsDefault struct {
+	ID                 int64
+	OrgID              string
+	TeamID             string
+	UserID             string
+	ApiKeyID           string
+	Provider           string
+	Model              string
+	RequestTokens      int32
+	ResponseTokens     int32
+	LatencyMs          int32
+	StatusCode         int32
+	RequestFingerprint sql.NullString
+	CreatedAt          time.Time
+}
+
 type User struct {
 	ID        string
 	Email     string

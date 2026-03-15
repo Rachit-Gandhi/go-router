@@ -154,6 +154,8 @@ const touchRefreshToken = `-- name: TouchRefreshToken :execrows
 UPDATE auth_refresh_tokens
 SET last_used_at = NOW()
 WHERE id = $1
+  AND revoked_at IS NULL
+  AND expires_at > NOW()
 `
 
 func (q *Queries) TouchRefreshToken(ctx context.Context, id string) (int64, error) {

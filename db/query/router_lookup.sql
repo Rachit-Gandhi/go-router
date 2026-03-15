@@ -1,5 +1,5 @@
 -- name: ResolveIdentityByAPIKeyHash :one
-SELECT id, org_id, team_id, user_id, key_hash, key_prefix, revoked_at, is_active, last_used_at, created_at
+SELECT id, org_id, team_id, user_id, key_prefix, revoked_at, is_active, last_used_at, created_at
 FROM user_team_api_keys
 WHERE key_hash = $1
   AND is_active = TRUE

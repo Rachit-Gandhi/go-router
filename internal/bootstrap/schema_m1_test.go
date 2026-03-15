@@ -32,9 +32,12 @@ func TestCoreSchemaMigrationExistsWithV1Tables(t *testing.T) {
 		"REFERENCES orgs(id)",
 	}
 	for _, snippet := range requiredSnippets {
-		if !strings.Contains(got, snippet) {
-			t.Fatalf("expected migration to include %q", snippet)
-		}
+		snippet := snippet
+		t.Run(snippet, func(t *testing.T) {
+			if !strings.Contains(got, snippet) {
+				t.Fatalf("expected migration to include %q", snippet)
+			}
+		})
 	}
 }
 
@@ -51,12 +54,15 @@ func TestCoreSQLCQuerySpecsExist(t *testing.T) {
 	}
 
 	for _, file := range queryFiles {
-		content, err := os.ReadFile(filepath.Clean(file))
-		if err != nil {
-			t.Fatalf("expected query file %s: %v", file, err)
-		}
-		if !strings.Contains(string(content), "-- name:") {
-			t.Fatalf("expected sqlc named query declarations in %s", file)
-		}
+		file := file
+		t.Run(file, func(t *testing.T) {
+			content, err := os.ReadFile(filepath.Clean(file))
+			if err != nil {
+				t.Fatalf("expected query file %s: %v", file, err)
+			}
+			if !strings.Contains(string(content), "-- name:") {
+				t.Fatalf("expected sqlc named query declarations in %s", file)
+			}
+		})
 	}
 }

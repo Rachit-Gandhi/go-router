@@ -103,15 +103,17 @@ SELECT org_id, team_id, admin_user_id, created_at
 FROM team_admin_scopes
 WHERE org_id = $1 AND admin_user_id = $2
 ORDER BY created_at DESC
+LIMIT $3
 `
 
 type ListTeamAdminScopesParams struct {
 	OrgID       string
 	AdminUserID string
+	Limit       int32
 }
 
 func (q *Queries) ListTeamAdminScopes(ctx context.Context, arg ListTeamAdminScopesParams) ([]TeamAdminScope, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamAdminScopes, arg.OrgID, arg.AdminUserID)
+	rows, err := q.db.QueryContext(ctx, listTeamAdminScopes, arg.OrgID, arg.AdminUserID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

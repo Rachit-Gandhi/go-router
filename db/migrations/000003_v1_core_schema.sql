@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS orgs (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    owner_user_id TEXT NOT NULL REFERENCES users(id),
+    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -39,8 +39,7 @@ CREATE TABLE IF NOT EXISTS team_memberships (
     team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (team_id, user_id),
-    UNIQUE (org_id, team_id, user_id)
+    PRIMARY KEY (team_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS team_admin_scopes (
@@ -90,6 +89,8 @@ CREATE TABLE IF NOT EXISTS user_team_api_keys (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_team_api_keys_active_unique
     ON user_team_api_keys (org_id, team_id, user_id, is_active)
     WHERE is_active = TRUE;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_team_api_keys_key_hash_unique
+    ON user_team_api_keys (key_hash);
 
 CREATE TABLE IF NOT EXISTS org_provider_keys (
     id TEXT PRIMARY KEY,
@@ -123,7 +124,7 @@ CREATE TABLE IF NOT EXISTS team_model_policies (
 );
 
 CREATE TABLE IF NOT EXISTS usage_logs (
-    id BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL,
     org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -135,14 +136,26 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     latency_ms INTEGER NOT NULL DEFAULT 0,
     status_code INTEGER NOT NULL,
     request_fingerprint TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+
+CREATE TABLE IF NOT EXISTS usage_logs_default PARTITION OF usage_logs DEFAULT;
+
+CREATE INDEX IF NOT EXISTS idx_usage_logs_org_created_at ON usage_logs (org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_team_created_at ON usage_logs (team_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_request_fingerprint ON usage_logs (request_fingerprint);
 
 -- +goose Down
+DROP INDEX IF EXISTS idx_usage_logs_request_fingerprint;
+DROP INDEX IF EXISTS idx_usage_logs_team_created_at;
+DROP INDEX IF EXISTS idx_usage_logs_org_created_at;
+DROP TABLE IF EXISTS usage_logs_default;
 DROP TABLE IF EXISTS usage_logs;
 DROP TABLE IF EXISTS team_model_policies;
 DROP TABLE IF EXISTS org_model_policies;
 DROP TABLE IF EXISTS org_provider_keys;
+DROP INDEX IF EXISTS idx_user_team_api_keys_key_hash_unique;
 DROP INDEX IF EXISTS idx_user_team_api_keys_active_unique;
 DROP TABLE IF EXISTS user_team_api_keys;
 DROP TABLE IF EXISTS auth_refresh_tokens;
