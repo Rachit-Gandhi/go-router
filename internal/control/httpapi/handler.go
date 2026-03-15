@@ -132,6 +132,21 @@ func NewHandlerWithDB(db *sql.DB, sessionCodec *auth.SessionCodec, providerKeySe
 	mux.HandleFunc("POST /v1/control/orgs/{org_id}/providers/{provider}/keys", h.handleCreateOrgProviderKey)
 	mux.HandleFunc("PUT /v1/control/orgs/{org_id}/policies/models", h.handleUpsertOrgModelPolicies)
 	mux.HandleFunc("PUT /v1/control/orgs/{org_id}/teams/{team_id}/policies/models", h.handleUpsertTeamModelPolicies)
+	mux.HandleFunc("GET /v1/control/session", h.handleGetSession)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/summary", h.handleGetOrgSummary)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/teams", h.handleListTeams)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/teams/{team_id}/members", h.handleListTeamMembers)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/teams/{team_id}/admins", h.handleListTeamAdmins)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/api-keys", h.handleListAPIKeys)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/providers/keys", h.handleListProviderKeys)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/policies/models", h.handleListOrgModelPolicies)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/teams/{team_id}/policies/models", h.handleListTeamModelPolicies)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/teams/{team_id}/policies/effective-models", h.handleListEffectiveModels)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/usage/summary", h.handleUsageSummary)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/usage/timeseries", h.handleUsageTimeSeries)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/usage/by-team", h.handleUsageByTeam)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/usage/by-model", h.handleUsageByModel)
+	mux.HandleFunc("GET /v1/control/orgs/{org_id}/events", h.handleListEvents)
 
 	return mux
 }
