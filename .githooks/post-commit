@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+"${REPO_ROOT}/scripts/update_memory_after_commit.sh" --check || true
