@@ -114,8 +114,19 @@ func TestVisibilityEndpoints(t *testing.T) {
 	requireStatus(t, adminsRec, http.StatusOK)
 	var adminsBody map[string]any
 	decodeJSON(t, adminsRec, &adminsBody)
-	if len(adminsBody["items"].([]any)) < 1 {
-		t.Fatalf("expected at least one team admin scope, got %#v", adminsBody)
+	adminItems := adminsBody["items"].([]any)
+	var sawOwner, sawScopedAdmin bool
+	for _, raw := range adminItems {
+		item := raw.(map[string]any)
+		switch item["user_id"] {
+		case ownerUserID:
+			sawOwner = true
+		case adminUserID:
+			sawScopedAdmin = true
+		}
+	}
+	if !sawOwner || !sawScopedAdmin {
+		t.Fatalf("expected owner and scoped admin in admin list, got %#v", adminsBody)
 	}
 
 	apiKeysRec := performGETRequest(t, h, "/v1/control/orgs/"+orgID+"/api-keys?include_revoked=true", ownerCookie)

@@ -9,11 +9,11 @@ import (
 )
 
 func TestHealthz(t *testing.T) {
-	tr := newTestRouterHandler(t)
+	h := NewHandlerWithoutDB(time.Now)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/router/healthz", nil)
 	rec := httptest.NewRecorder()
-	tr.handler.ServeHTTP(rec, req)
+	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -24,11 +24,11 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestHealthzMethodNotAllowed(t *testing.T) {
-	tr := newTestRouterHandler(t)
+	h := NewHandlerWithoutDB(time.Now)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/router/healthz", nil)
 	rec := httptest.NewRecorder()
-	tr.handler.ServeHTTP(rec, req)
+	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, rec.Code)

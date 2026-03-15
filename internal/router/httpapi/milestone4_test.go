@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -169,6 +170,36 @@ func TestChatCompletionsRejectsInvalidAPIKey(t *testing.T) {
 	requireStatus(t, rec, http.StatusUnauthorized)
 }
 
+func TestChatCompletionsAllowsRequestedModelBeyondFirstPolicyPage(t *testing.T) {
+	tr := newTestRouterHandler(t)
+
+	orgPolicies := make([]modelPolicy, 0, 140)
+	for i := 0; i < 140; i++ {
+		orgPolicies = append(orgPolicies, modelPolicy{
+			Provider: "openai",
+			Model:    "model-" + strconv.Itoa(1000+i),
+			Allowed:  true,
+		})
+	}
+	requestedModel := orgPolicies[len(orgPolicies)-1].Model
+
+	fixture := seedRouterFixture(t, tr.db, orgPolicies, nil)
+
+	rec := performRouterChatRequest(t, tr.handler, fixture.PlaintextKey, map[string]any{
+		"model": requestedModel,
+		"messages": []map[string]any{
+			{"role": "user", "content": "choose explicitly requested model"},
+		},
+	})
+	requireStatus(t, rec, http.StatusOK)
+
+	var body map[string]any
+	decodeJSONResponse(t, rec, &body)
+	if body["model"] != requestedModel {
+		t.Fatalf("expected requested model %q, got %#v", requestedModel, body["model"])
+	}
+}
+
 func seedRouterFixture(t *testing.T, db *sql.DB, orgPolicies, teamPolicies []modelPolicy) routerFixture {
 	t.Helper()
 
@@ -178,7 +209,7 @@ func seedRouterFixture(t *testing.T, db *sql.DB, orgPolicies, teamPolicies []mod
 	ownerUserID := "usr_owner"
 	orgID := "org_router"
 	teamID := "team_router"
-	plaintextKey := "uk_live_test_key_123456789"
+	plaintextKey := "router-fixture-token"
 	apiKeyID := "ukey_router_owner"
 
 	if _, err := q.CreateUser(ctx, dbquery.CreateUserParams{ID: ownerUserID, Email: "owner-router@example.com", Name: "Owner Router"}); err != nil {

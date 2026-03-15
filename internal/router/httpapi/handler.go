@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	effectiveModelLimit = 128
+	effectiveModelPageSize int32 = 128
 
 	policyDeniedErrorMessage = "model not allowed by org/team policy"
 )
@@ -104,21 +104,30 @@ func NewHandlerWithDB(db *sql.DB, now func() time.Time) http.Handler {
 	}
 
 	h := &routerHandler{
-		queries: dbquery.New(db),
-		adapters: map[string]completionAdapter{
-			"openai":    stubAdapter{},
-			"claude":    stubAdapter{},
-			"anthropic": stubAdapter{},
-			"gemini":    stubAdapter{},
-			"codex":     stubAdapter{},
-		},
-		now: now,
+		queries:  dbquery.New(db),
+		adapters: defaultAdapters(),
+		now:      now,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/router/healthz", httputil.HealthHandler())
 	mux.HandleFunc("POST /v1/router/chat/completions", h.handleChatCompletions)
 
+	return mux
+}
+
+// NewHandlerWithoutDB builds a lightweight router useful for route-level tests.
+func NewHandlerWithoutDB(now func() time.Time) http.Handler {
+	if now == nil {
+		now = time.Now
+	}
+	h := &routerHandler{
+		adapters: defaultAdapters(),
+		now:      now,
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/router/healthz", httputil.HealthHandler())
+	mux.HandleFunc("POST /v1/router/chat/completions", h.handleChatCompletions)
 	return mux
 }
 
@@ -159,6 +168,11 @@ type allowedModel struct {
 }
 
 func (h *routerHandler) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	if h.queries == nil {
+		writeError(w, http.StatusServiceUnavailable, "router backend is not configured")
+		return
+	}
+
 	apiKey, ok := parseBearerToken(r.Header.Get("Authorization"))
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "missing or invalid bearer token")
@@ -191,11 +205,7 @@ func (h *routerHandler) handleChatCompletions(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	allowedRows, err := h.queries.ListEffectiveAllowedModels(r.Context(), dbquery.ListEffectiveAllowedModelsParams{
-		OrgID:     identity.OrgID,
-		TeamID:    identity.TeamID,
-		LimitRows: effectiveModelLimit,
-	})
+	allowedRows, err := h.listAllEffectiveAllowedModels(r.Context(), identity.OrgID, identity.TeamID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to resolve model policy")
 		return
@@ -255,6 +265,34 @@ func (h *routerHandler) handleChatCompletions(w http.ResponseWriter, r *http.Req
 			TotalTokens:      promptTokens + completionTokens,
 		},
 	})
+}
+
+func (h *routerHandler) listAllEffectiveAllowedModels(ctx context.Context, orgID, teamID string) ([]dbquery.ListEffectiveAllowedModelsRow, error) {
+	offset := int32(0)
+	all := make([]dbquery.ListEffectiveAllowedModelsRow, 0, effectiveModelPageSize)
+
+	for {
+		rows, err := h.queries.ListEffectiveAllowedModels(ctx, dbquery.ListEffectiveAllowedModelsParams{
+			OrgID:      orgID,
+			TeamID:     teamID,
+			OffsetRows: sql.NullInt32{Int32: offset, Valid: true},
+			LimitRows:  effectiveModelPageSize,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) == 0 {
+			break
+		}
+
+		all = append(all, rows...)
+		if len(rows) < int(effectiveModelPageSize) {
+			break
+		}
+		offset += int32(len(rows))
+	}
+
+	return all, nil
 }
 
 var errPolicyDenied = errors.New("policy denied")
@@ -379,4 +417,14 @@ func randomID(prefix string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%s_%s", prefix, hex.EncodeToString(buf)), nil
+}
+
+func defaultAdapters() map[string]completionAdapter {
+	return map[string]completionAdapter{
+		"openai":    stubAdapter{},
+		"claude":    stubAdapter{},
+		"anthropic": stubAdapter{},
+		"gemini":    stubAdapter{},
+		"codex":     stubAdapter{},
+	}
 }

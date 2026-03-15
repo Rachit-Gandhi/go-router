@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,8 @@ var (
 	postgresSetupErr  error
 	postgresDB        *sql.DB
 	postgresContainer string
+
+	errDockerUnavailable = errors.New("docker not found")
 )
 
 func TestMain(m *testing.M) {
@@ -58,22 +61,17 @@ func ensurePostgres(t *testing.T) *sql.DB {
 		postgresSetupErr = startPostgresForTests()
 	})
 	if postgresSetupErr != nil {
-		t.Skipf("skipping postgres-backed router tests: %v", postgresSetupErr)
+		if errors.Is(postgresSetupErr, errDockerUnavailable) {
+			t.Skipf("skipping postgres-backed router tests: %v", postgresSetupErr)
+		}
+		t.Fatalf("postgres-backed router test setup failed: %v", postgresSetupErr)
 	}
 	return postgresDB
 }
 
 func startPostgresForTests() error {
 	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("docker not found: %w", err)
-	}
-
-	portReservation, port, err := reserveTCPPort()
-	if err != nil {
-		return fmt.Errorf("reserve tcp port: %w", err)
-	}
-	if err := portReservation.Close(); err != nil {
-		return fmt.Errorf("release reserved port: %w", err)
+		return fmt.Errorf("%w: %v", errDockerUnavailable, err)
 	}
 
 	run := exec.Command(
@@ -81,7 +79,7 @@ func startPostgresForTests() error {
 		"-e", "POSTGRES_USER=postgres",
 		"-e", "POSTGRES_PASSWORD=postgres",
 		"-e", "POSTGRES_DB=gorouter_test",
-		"-p", fmt.Sprintf("%d:5432", port),
+		"-p", "127.0.0.1::5432",
 		"postgres:16-alpine",
 	)
 	out, err := run.CombinedOutput()
@@ -89,6 +87,11 @@ func startPostgresForTests() error {
 		return fmt.Errorf("start postgres container: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	postgresContainer = strings.TrimSpace(string(out))
+
+	port, err := resolvePublishedPostgresPort(postgresContainer)
+	if err != nil {
+		return err
+	}
 
 	dsn := fmt.Sprintf("postgres://postgres:postgres@127.0.0.1:%d/gorouter_test?sslmode=disable", port)
 	var db *sql.DB
@@ -129,18 +132,27 @@ func resetPostgresData(t *testing.T, db *sql.DB) {
 	}
 }
 
-func reserveTCPPort() (net.Listener, int, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+func resolvePublishedPostgresPort(containerID string) (int, error) {
+	out, err := exec.Command("docker", "port", containerID, "5432/tcp").CombinedOutput()
 	if err != nil {
-		return nil, 0, err
+		return 0, fmt.Errorf("inspect postgres mapped port: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-
-	addr, ok := ln.Addr().(*net.TCPAddr)
-	if !ok {
-		_ = ln.Close()
-		return nil, 0, errors.New("not tcp addr")
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		_, portText, err := net.SplitHostPort(line)
+		if err != nil {
+			continue
+		}
+		port, err := strconv.Atoi(portText)
+		if err != nil {
+			continue
+		}
+		return port, nil
 	}
-	return ln, addr.Port, nil
+	return 0, fmt.Errorf("unable to parse postgres mapped port from %q", strings.TrimSpace(string(out)))
 }
 
 func repoRoot() (string, error) {

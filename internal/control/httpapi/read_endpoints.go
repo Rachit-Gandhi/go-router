@@ -284,14 +284,31 @@ func (h *controlHandler) handleListTeamAdmins(w http.ResponseWriter, r *http.Req
 	}
 
 	const listAdminsSQL = `
-SELECT tas.admin_user_id, u.email, u.name, om.role, tas.created_at
-FROM team_admin_scopes tas
-JOIN users u
-	ON u.id = tas.admin_user_id
-JOIN org_memberships om
-	ON om.org_id = tas.org_id AND om.user_id = tas.admin_user_id
-WHERE tas.org_id = $1 AND tas.team_id = $2
-ORDER BY tas.created_at DESC, tas.admin_user_id ASC
+WITH admins AS (
+	SELECT om.user_id, u.email, u.name, om.role, om.created_at
+	FROM org_memberships om
+	JOIN users u
+		ON u.id = om.user_id
+	WHERE om.org_id = $1 AND om.role = 'org_owner'
+
+	UNION ALL
+
+	SELECT tas.admin_user_id, u.email, u.name, om.role, tas.created_at
+	FROM team_admin_scopes tas
+	JOIN users u
+		ON u.id = tas.admin_user_id
+	JOIN org_memberships om
+		ON om.org_id = tas.org_id AND om.user_id = tas.admin_user_id
+	WHERE tas.org_id = $1 AND tas.team_id = $2
+),
+deduped AS (
+	SELECT DISTINCT ON (user_id) user_id, email, name, role, created_at
+	FROM admins
+	ORDER BY user_id, created_at DESC
+)
+SELECT user_id, email, name, role, created_at
+FROM deduped
+ORDER BY created_at DESC, user_id ASC
 LIMIT $3 OFFSET $4;
 `
 
@@ -1063,7 +1080,6 @@ func parseOffsetLimit(w http.ResponseWriter, r *http.Request, defaultLimit, maxL
 
 func parseTimeRange(w http.ResponseWriter, r *http.Request, now time.Time) (time.Time, time.Time, bool) {
 	to := now.UTC()
-	from := to.Add(-30 * 24 * time.Hour)
 
 	if raw := strings.TrimSpace(r.URL.Query().Get("to")); raw != "" {
 		parsed, err := time.Parse(time.RFC3339, raw)
@@ -1073,6 +1089,8 @@ func parseTimeRange(w http.ResponseWriter, r *http.Request, now time.Time) (time
 		}
 		to = parsed.UTC()
 	}
+
+	from := to.Add(-30 * 24 * time.Hour)
 
 	if raw := strings.TrimSpace(r.URL.Query().Get("from")); raw != "" {
 		parsed, err := time.Parse(time.RFC3339, raw)
