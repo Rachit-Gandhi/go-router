@@ -45,11 +45,13 @@ func newTestHandler(t *testing.T) *testControlHandler {
 		t.Fatalf("new session codec: %v", err)
 	}
 	return &testControlHandler{
+		db:      db,
 		handler: NewHandlerWithDB(db, codec, time.Now),
 	}
 }
 
 type testControlHandler struct {
+	db      *sql.DB
 	handler http.Handler
 }
 

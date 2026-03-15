@@ -17,6 +17,7 @@ import (
 
 	dbquery "github.com/Rachit-Gandhi/go-router/db/query"
 	"github.com/Rachit-Gandhi/go-router/internal/auth"
+	internalcrypto "github.com/Rachit-Gandhi/go-router/internal/crypto"
 	"github.com/Rachit-Gandhi/go-router/internal/httputil"
 	"github.com/Rachit-Gandhi/go-router/internal/store"
 )
@@ -102,6 +103,11 @@ func NewHandlerWithDB(db *sql.DB, sessionCodec *auth.SessionCodec, now func() ti
 	mux.HandleFunc("POST /v1/control/orgs/{org_id}/teams", h.handleCreateTeam)
 	mux.HandleFunc("POST /v1/control/orgs/{org_id}/teams/{team_id}/members", h.handleAddTeamMember)
 	mux.HandleFunc("POST /v1/control/orgs/{org_id}/teams/{team_id}/admins/{user_id}", h.handleAddTeamAdminScope)
+	mux.HandleFunc("POST /v1/control/orgs/{org_id}/teams/{team_id}/users/{user_id}/api-keys", h.handleCreateUserTeamAPIKey)
+	mux.HandleFunc("POST /v1/control/orgs/{org_id}/api-keys/{key_id}/revoke", h.handleRevokeUserTeamAPIKey)
+	mux.HandleFunc("POST /v1/control/orgs/{org_id}/providers/{provider}/keys", h.handleCreateOrgProviderKey)
+	mux.HandleFunc("PUT /v1/control/orgs/{org_id}/policies/models", h.handleUpsertOrgModelPolicies)
+	mux.HandleFunc("PUT /v1/control/orgs/{org_id}/teams/{team_id}/policies/models", h.handleUpsertTeamModelPolicies)
 
 	return mux
 }
@@ -722,6 +728,336 @@ func (h *controlHandler) handleAddTeamAdminScope(w http.ResponseWriter, r *http.
 	})
 }
 
+func (h *controlHandler) handleCreateUserTeamAPIKey(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	orgID := strings.TrimSpace(r.PathValue("org_id"))
+	teamID := strings.TrimSpace(r.PathValue("team_id"))
+	targetUserID := strings.TrimSpace(r.PathValue("user_id"))
+
+	claims, ok := h.requireSession(ctx, w, r)
+	if !ok {
+		return
+	}
+	if claims.OrgID != orgID {
+		writeError(w, http.StatusForbidden, "session org mismatch")
+		return
+	}
+
+	allowed, err := h.canManageTeamScopedResource(ctx, orgID, teamID, claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to validate access")
+		return
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "insufficient permissions for team key management")
+		return
+	}
+
+	if _, err := h.queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: orgID, UserID: targetUserID}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "target user is not a member of org")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to verify target membership")
+		return
+	}
+
+	keyID, err := randomID("ukey")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate key id")
+		return
+	}
+	plaintextKey, keyPrefix, err := generateAPIKey()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate key")
+		return
+	}
+
+	row, err := h.queries.CreateUserTeamAPIKey(ctx, dbquery.CreateUserTeamAPIKeyParams{
+		ID:        keyID,
+		OrgID:     orgID,
+		TeamID:    teamID,
+		UserID:    targetUserID,
+		KeyHash:   hashValue(plaintextKey),
+		KeyPrefix: keyPrefix,
+	})
+	if err != nil {
+		writeError(w, http.StatusConflict, "active key already exists for org/team/user")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":         row.ID,
+		"org_id":     row.OrgID,
+		"team_id":    row.TeamID,
+		"user_id":    row.UserID,
+		"key_prefix": row.KeyPrefix,
+		"api_key":    plaintextKey,
+	})
+}
+
+func (h *controlHandler) handleRevokeUserTeamAPIKey(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	orgID := strings.TrimSpace(r.PathValue("org_id"))
+	keyID := strings.TrimSpace(r.PathValue("key_id"))
+
+	claims, ok := h.requireSession(ctx, w, r)
+	if !ok {
+		return
+	}
+	if claims.OrgID != orgID {
+		writeError(w, http.StatusForbidden, "session org mismatch")
+		return
+	}
+
+	requesterMembership, err := h.queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: orgID, UserID: claims.UserID})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusForbidden, "not a member of org")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve requester membership")
+		return
+	}
+	if requesterMembership.Role != roleOrgOwner {
+		writeError(w, http.StatusForbidden, "only org owner can revoke api keys")
+		return
+	}
+
+	rows, err := h.queries.RevokeUserTeamAPIKey(ctx, dbquery.RevokeUserTeamAPIKeyParams{ID: keyID, OrgID: orgID})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to revoke api key")
+		return
+	}
+	if rows == 0 {
+		writeError(w, http.StatusNotFound, "api key not found or already revoked")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "revoked",
+		"id":     keyID,
+	})
+}
+
+func (h *controlHandler) handleCreateOrgProviderKey(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	orgID := strings.TrimSpace(r.PathValue("org_id"))
+	provider := strings.TrimSpace(r.PathValue("provider"))
+
+	claims, ok := h.requireSession(ctx, w, r)
+	if !ok {
+		return
+	}
+	if claims.OrgID != orgID {
+		writeError(w, http.StatusForbidden, "session org mismatch")
+		return
+	}
+
+	requesterMembership, err := h.queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: orgID, UserID: claims.UserID})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusForbidden, "not a member of org")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve requester membership")
+		return
+	}
+	if requesterMembership.Role != roleOrgOwner {
+		writeError(w, http.StatusForbidden, "only org owner can manage provider keys")
+		return
+	}
+
+	var req struct {
+		APIKey   string `json:"api_key"`
+		KeyKekID string `json:"key_kek_id"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	req.KeyKekID = strings.TrimSpace(req.KeyKekID)
+	if req.APIKey == "" || req.KeyKekID == "" {
+		writeError(w, http.StatusBadRequest, "api_key and key_kek_id are required")
+		return
+	}
+	if provider == "" {
+		writeError(w, http.StatusBadRequest, "provider is required")
+		return
+	}
+
+	secret := os.Getenv("CONTROL_PROVIDER_KEY_SECRET")
+	if secret == "" {
+		secret = "dev-provider-key-secret"
+	}
+	ciphertext, nonce, err := internalcrypto.SealString(secret, req.APIKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encrypt provider key")
+		return
+	}
+
+	keyID, err := randomID("opk")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate provider key id")
+		return
+	}
+
+	row, err := h.queries.CreateOrgProviderKey(ctx, dbquery.CreateOrgProviderKeyParams{
+		ID:            keyID,
+		OrgID:         orgID,
+		Provider:      provider,
+		KeyCiphertext: ciphertext,
+		KeyNonce:      nonce,
+		KeyKekID:      req.KeyKekID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to store provider key")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":        row.ID,
+		"org_id":    row.OrgID,
+		"provider":  row.Provider,
+		"is_active": row.IsActive,
+	})
+}
+
+func (h *controlHandler) handleUpsertOrgModelPolicies(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	orgID := strings.TrimSpace(r.PathValue("org_id"))
+
+	claims, ok := h.requireSession(ctx, w, r)
+	if !ok {
+		return
+	}
+	if claims.OrgID != orgID {
+		writeError(w, http.StatusForbidden, "session org mismatch")
+		return
+	}
+
+	requesterMembership, err := h.queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: orgID, UserID: claims.UserID})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusForbidden, "not a member of org")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve requester membership")
+		return
+	}
+	if requesterMembership.Role != roleOrgOwner {
+		writeError(w, http.StatusForbidden, "only org owner can manage org policies")
+		return
+	}
+
+	entries, ok := parsePolicyEntries(r, w)
+	if !ok {
+		return
+	}
+
+	tx, err := h.beginTx(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Tx.Rollback()
+
+	for _, entry := range entries {
+		if _, err := tx.Queries.UpsertOrgModelPolicy(ctx, dbquery.UpsertOrgModelPolicyParams{
+			OrgID:     orgID,
+			Provider:  entry.Provider,
+			Model:     entry.Model,
+			IsAllowed: entry.IsAllowed,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to upsert org policy")
+			return
+		}
+	}
+
+	if err := tx.Tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit org policies")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"updated": len(entries)})
+}
+
+func (h *controlHandler) handleUpsertTeamModelPolicies(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	orgID := strings.TrimSpace(r.PathValue("org_id"))
+	teamID := strings.TrimSpace(r.PathValue("team_id"))
+
+	claims, ok := h.requireSession(ctx, w, r)
+	if !ok {
+		return
+	}
+	if claims.OrgID != orgID {
+		writeError(w, http.StatusForbidden, "session org mismatch")
+		return
+	}
+
+	allowed, err := h.canManageTeamScopedResource(ctx, orgID, teamID, claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to validate access")
+		return
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "insufficient permissions for team policy management")
+		return
+	}
+
+	entries, ok := parsePolicyEntries(r, w)
+	if !ok {
+		return
+	}
+
+	orgAllowed, err := h.queries.ListOrgAllowedModels(ctx, orgID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load org allowlist")
+		return
+	}
+	orgAllowSet := make(map[string]struct{}, len(orgAllowed))
+	for _, row := range orgAllowed {
+		orgAllowSet[row.Provider+":"+row.Model] = struct{}{}
+	}
+	for _, entry := range entries {
+		if entry.IsAllowed {
+			if _, ok := orgAllowSet[entry.Provider+":"+entry.Model]; !ok {
+				writeError(w, http.StatusBadRequest, "team policy cannot allow model absent from org allowlist")
+				return
+			}
+		}
+	}
+
+	tx, err := h.beginTx(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Tx.Rollback()
+
+	for _, entry := range entries {
+		if _, err := tx.Queries.UpsertTeamModelPolicy(ctx, dbquery.UpsertTeamModelPolicyParams{
+			OrgID:     orgID,
+			TeamID:    teamID,
+			Provider:  entry.Provider,
+			Model:     entry.Model,
+			IsAllowed: entry.IsAllowed,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to upsert team policy")
+			return
+		}
+	}
+
+	if err := tx.Tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit team policies")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"updated": len(entries)})
+}
+
 func (h *controlHandler) requireSession(ctx context.Context, w http.ResponseWriter, r *http.Request) (auth.SessionClaims, bool) {
 	var zero auth.SessionClaims
 
@@ -863,6 +1199,60 @@ func (h *controlHandler) beginTx(ctx context.Context) (*txQueries, error) {
 	return &txQueries{Tx: tx, Queries: h.queries.WithTx(tx)}, nil
 }
 
+func (h *controlHandler) canManageTeamScopedResource(ctx context.Context, orgID, teamID, userID string) (bool, error) {
+	requesterMembership, err := h.queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: orgID, UserID: userID})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if requesterMembership.Role == roleOrgOwner {
+		return true, nil
+	}
+	if requesterMembership.Role != roleTeamAdmin {
+		return false, nil
+	}
+	hasScope, err := h.queries.HasTeamAdminScope(ctx, dbquery.HasTeamAdminScopeParams{
+		OrgID:       orgID,
+		TeamID:      teamID,
+		AdminUserID: userID,
+	})
+	if err != nil {
+		return false, err
+	}
+	return hasScope, nil
+}
+
+type modelPolicyEntry struct {
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	IsAllowed bool   `json:"is_allowed"`
+}
+
+func parsePolicyEntries(r *http.Request, w http.ResponseWriter) ([]modelPolicyEntry, bool) {
+	var req struct {
+		Entries []modelPolicyEntry `json:"entries"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return nil, false
+	}
+	if len(req.Entries) == 0 {
+		writeError(w, http.StatusBadRequest, "entries are required")
+		return nil, false
+	}
+	for i := range req.Entries {
+		req.Entries[i].Provider = strings.TrimSpace(req.Entries[i].Provider)
+		req.Entries[i].Model = strings.TrimSpace(req.Entries[i].Model)
+		if req.Entries[i].Provider == "" || req.Entries[i].Model == "" {
+			writeError(w, http.StatusBadRequest, "each policy entry requires provider and model")
+			return nil, false
+		}
+	}
+	return req.Entries, true
+}
+
 func decodeJSONBody(r *http.Request, out any) error {
 	if r.Body == nil {
 		return errors.New("missing body")
@@ -905,6 +1295,19 @@ func randomCode() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+func generateAPIKey() (string, string, error) {
+	var b [24]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", "", err
+	}
+	key := "grk_" + hex.EncodeToString(b[:])
+	prefixLen := 12
+	if len(key) < prefixLen {
+		prefixLen = len(key)
+	}
+	return key, key[:prefixLen], nil
 }
 
 func hashValue(value string) string {
