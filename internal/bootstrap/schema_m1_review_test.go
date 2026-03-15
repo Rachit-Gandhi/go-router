@@ -130,12 +130,13 @@ func TestAuthTouchRefreshTokenIsBoundedToActiveTokens(t *testing.T) {
 	}
 
 	got := string(content)
+	touchBlock := extractNamedQueryBlock(t, got, "TouchRefreshToken")
 	requiredSnippets := []string{
 		"AND revoked_at IS NULL",
 		"AND expires_at > NOW()",
 	}
 	for _, snippet := range requiredSnippets {
-		if !strings.Contains(got, snippet) {
+		if !strings.Contains(touchBlock, snippet) {
 			t.Fatalf("expected TouchRefreshToken to include %q", snippet)
 		}
 	}
