@@ -9,7 +9,8 @@ import (
 )
 
 func TestOrgSignupAndOwnerCanCreateTeam(t *testing.T) {
-	h := NewHandler()
+	tc := newTestHandler(t)
+	h := tc.handler
 
 	orgID, _, ownerCookie := signupAndAuthenticateOwner(t, h)
 
@@ -32,7 +33,8 @@ func TestOrgSignupAndOwnerCanCreateTeam(t *testing.T) {
 }
 
 func TestMagicLinkExchangeRefreshAndLogout(t *testing.T) {
-	h := NewHandler()
+	tc := newTestHandler(t)
+	h := tc.handler
 
 	orgID, _, _ := signupAndAuthenticateOwner(t, h)
 
@@ -88,7 +90,8 @@ func TestMagicLinkExchangeRefreshAndLogout(t *testing.T) {
 }
 
 func TestTeamAdminScopeEnforcement(t *testing.T) {
-	h := NewHandler()
+	tc := newTestHandler(t)
+	h := tc.handler
 
 	orgID, _, ownerCookie := signupAndAuthenticateOwner(t, h)
 

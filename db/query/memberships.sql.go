@@ -57,6 +57,50 @@ func (q *Queries) AddTeamMembership(ctx context.Context, arg AddTeamMembershipPa
 	return i, err
 }
 
+const getOrgMembership = `-- name: GetOrgMembership :one
+SELECT org_id, user_id, role, created_at
+FROM org_memberships
+WHERE org_id = $1 AND user_id = $2
+`
+
+type GetOrgMembershipParams struct {
+	OrgID  string
+	UserID string
+}
+
+func (q *Queries) GetOrgMembership(ctx context.Context, arg GetOrgMembershipParams) (OrgMembership, error) {
+	row := q.db.QueryRowContext(ctx, getOrgMembership, arg.OrgID, arg.UserID)
+	var i OrgMembership
+	err := row.Scan(
+		&i.OrgID,
+		&i.UserID,
+		&i.Role,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const hasTeamAdminScope = `-- name: HasTeamAdminScope :one
+SELECT EXISTS (
+    SELECT 1
+    FROM team_admin_scopes
+    WHERE org_id = $1 AND team_id = $2 AND admin_user_id = $3
+)
+`
+
+type HasTeamAdminScopeParams struct {
+	OrgID       string
+	TeamID      string
+	AdminUserID string
+}
+
+func (q *Queries) HasTeamAdminScope(ctx context.Context, arg HasTeamAdminScopeParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasTeamAdminScope, arg.OrgID, arg.TeamID, arg.AdminUserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listOrgMembershipsByOrg = `-- name: ListOrgMembershipsByOrg :many
 SELECT org_id, user_id, role, created_at
 FROM org_memberships
@@ -203,6 +247,58 @@ func (q *Queries) UpsertOrgMembership(ctx context.Context, arg UpsertOrgMembersh
 		&i.OrgID,
 		&i.UserID,
 		&i.Role,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const upsertTeamAdminScope = `-- name: UpsertTeamAdminScope :one
+INSERT INTO team_admin_scopes (org_id, team_id, admin_user_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (team_id, admin_user_id)
+DO UPDATE SET org_id = EXCLUDED.org_id
+RETURNING org_id, team_id, admin_user_id, created_at
+`
+
+type UpsertTeamAdminScopeParams struct {
+	OrgID       string
+	TeamID      string
+	AdminUserID string
+}
+
+func (q *Queries) UpsertTeamAdminScope(ctx context.Context, arg UpsertTeamAdminScopeParams) (TeamAdminScope, error) {
+	row := q.db.QueryRowContext(ctx, upsertTeamAdminScope, arg.OrgID, arg.TeamID, arg.AdminUserID)
+	var i TeamAdminScope
+	err := row.Scan(
+		&i.OrgID,
+		&i.TeamID,
+		&i.AdminUserID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const upsertTeamMembership = `-- name: UpsertTeamMembership :one
+INSERT INTO team_memberships (org_id, team_id, user_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (team_id, user_id)
+DO UPDATE SET org_id = EXCLUDED.org_id
+RETURNING org_id, team_id, user_id, created_at
+`
+
+type UpsertTeamMembershipParams struct {
+	OrgID  string
+	TeamID string
+	UserID string
+}
+
+func (q *Queries) UpsertTeamMembership(ctx context.Context, arg UpsertTeamMembershipParams) (TeamMembership, error) {
+	row := q.db.QueryRowContext(ctx, upsertTeamMembership, arg.OrgID, arg.TeamID, arg.UserID)
+	var i TeamMembership
+	err := row.Scan(
+		&i.OrgID,
+		&i.TeamID,
+		&i.UserID,
 		&i.CreatedAt,
 	)
 	return i, err

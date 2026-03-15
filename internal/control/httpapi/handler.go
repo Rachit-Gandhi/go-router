@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,11 +13,12 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
+	dbquery "github.com/Rachit-Gandhi/go-router/db/query"
 	"github.com/Rachit-Gandhi/go-router/internal/auth"
 	"github.com/Rachit-Gandhi/go-router/internal/httputil"
+	"github.com/Rachit-Gandhi/go-router/internal/store"
 )
 
 const (
@@ -29,99 +32,62 @@ const (
 	refreshTTL        = 24 * time.Hour
 )
 
-type controlState struct {
-	mu sync.Mutex
-
-	users         map[string]userRecord
-	usersByEmail  map[string]string
-	orgs          map[string]orgRecord
-	orgMembership map[string]membershipRecord
-
-	teams           map[string]teamRecord
-	teamMemberships map[string]teamMembershipRecord
-	teamAdminScopes map[string]struct{}
-
-	magicLinks    map[string]magicLinkRecord
-	refreshTokens map[string]refreshTokenRecord
-}
-
-type userRecord struct {
-	ID    string
-	Email string
-	Name  string
-}
-
-type orgRecord struct {
-	ID          string
-	Name        string
-	OwnerUserID string
-}
-
-type membershipRecord struct {
-	OrgID  string
-	UserID string
-	Role   string
-}
-
-type teamRecord struct {
-	ID    string
-	OrgID string
-	Name  string
-}
-
-type teamMembershipRecord struct {
-	OrgID  string
-	TeamID string
-	UserID string
-}
-
-type magicLinkRecord struct {
-	ID        string
-	OrgID     string
-	Email     string
-	CodeHash  string
-	ExpiresAt time.Time
-	Consumed  bool
-}
-
-type refreshTokenRecord struct {
-	ID         string
-	OrgID      string
-	UserID     string
-	TokenHash  string
-	ExpiresAt  time.Time
-	RevokedAt  *time.Time
-	LastUsedAt time.Time
-}
-
 type controlHandler struct {
-	state    *controlState
+	db       *sql.DB
+	queries  *dbquery.Queries
 	sessions *auth.SessionCodec
 	now      func() time.Time
 }
 
-// NewHandler builds the control-plane HTTP router.
+// NewHandler builds the control-plane HTTP router using Postgres config from env.
 func NewHandler() http.Handler {
+	h, _, err := NewHandlerWithPostgresFromEnv(time.Now)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
+// NewHandlerWithPostgresFromEnv creates a postgres-backed handler and returns the opened DB.
+func NewHandlerWithPostgresFromEnv(now func() time.Time) (http.Handler, *sql.DB, error) {
+	dsn := strings.TrimSpace(os.Getenv("CONTROL_DB_DSN"))
+	if dsn == "" {
+		return nil, nil, errors.New("CONTROL_DB_DSN is required")
+	}
+
+	db, err := store.OpenPostgres(dsn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open postgres: %w", err)
+	}
+
 	secret := os.Getenv("CONTROL_SESSION_SECRET")
 	if secret == "" {
 		secret = "dev-control-session-secret"
 	}
-	sessionCodec, err := auth.NewSessionCodec(secret)
+	codec, err := auth.NewSessionCodec(secret)
 	if err != nil {
-		panic(fmt.Sprintf("create session codec: %v", err))
+		_ = db.Close()
+		return nil, nil, fmt.Errorf("new session codec: %w", err)
 	}
 
-	return NewHandlerWithDeps(newControlState(), sessionCodec, time.Now)
+	return NewHandlerWithDB(db, codec, now), db, nil
 }
 
-// NewHandlerWithDeps builds the control-plane router with explicit dependencies.
-func NewHandlerWithDeps(state *controlState, sessionCodec *auth.SessionCodec, now func() time.Time) http.Handler {
+// NewHandlerWithDB builds the control-plane router with explicit DB/session dependencies.
+func NewHandlerWithDB(db *sql.DB, sessionCodec *auth.SessionCodec, now func() time.Time) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
+	if sessionCodec == nil {
+		panic("session codec is required")
+	}
+	if db == nil {
+		panic("db is required")
+	}
 
 	h := &controlHandler{
-		state:    state,
+		db:       db,
+		queries:  dbquery.New(db),
 		sessions: sessionCodec,
 		now:      now,
 	}
@@ -140,21 +106,8 @@ func NewHandlerWithDeps(state *controlState, sessionCodec *auth.SessionCodec, no
 	return mux
 }
 
-func newControlState() *controlState {
-	return &controlState{
-		users:           make(map[string]userRecord),
-		usersByEmail:    make(map[string]string),
-		orgs:            make(map[string]orgRecord),
-		orgMembership:   make(map[string]membershipRecord),
-		teams:           make(map[string]teamRecord),
-		teamMemberships: make(map[string]teamMembershipRecord),
-		teamAdminScopes: make(map[string]struct{}),
-		magicLinks:      make(map[string]magicLinkRecord),
-		refreshTokens:   make(map[string]refreshTokenRecord),
-	}
-}
-
 func (h *controlHandler) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	var req struct {
 		OrgName    string `json:"org_name"`
 		OwnerEmail string `json:"owner_email"`
@@ -176,40 +129,44 @@ func (h *controlHandler) handleCreateOrg(w http.ResponseWriter, r *http.Request)
 		req.OwnerName = "Owner"
 	}
 
-	ownerUserID, err := randomID("usr")
+	tx, err := h.beginTx(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to generate owner ID")
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
+	defer tx.Tx.Rollback()
+
+	ownerUserID, err := h.ensureUserByEmail(ctx, tx.Queries, req.OwnerEmail, req.OwnerName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve owner user")
+		return
+	}
+
 	orgID, err := randomID("org")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate org ID")
 		return
 	}
-
-	h.state.mu.Lock()
-	defer h.state.mu.Unlock()
-
-	if existingUserID, ok := h.state.usersByEmail[req.OwnerEmail]; ok {
-		ownerUserID = existingUserID
-	} else {
-		h.state.users[ownerUserID] = userRecord{
-			ID:    ownerUserID,
-			Email: req.OwnerEmail,
-			Name:  req.OwnerName,
-		}
-		h.state.usersByEmail[req.OwnerEmail] = ownerUserID
-	}
-
-	h.state.orgs[orgID] = orgRecord{
+	if _, err := tx.Queries.CreateOrg(ctx, dbquery.CreateOrgParams{
 		ID:          orgID,
 		Name:        req.OrgName,
 		OwnerUserID: ownerUserID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create org")
+		return
 	}
-	h.state.orgMembership[orgUserKey(orgID, ownerUserID)] = membershipRecord{
+	if _, err := tx.Queries.UpsertOrgMembership(ctx, dbquery.UpsertOrgMembershipParams{
 		OrgID:  orgID,
 		UserID: ownerUserID,
 		Role:   roleOrgOwner,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create owner membership")
+		return
+	}
+
+	if err := tx.Tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit org creation")
+		return
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -220,6 +177,7 @@ func (h *controlHandler) handleCreateOrg(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	var req struct {
 		OrgID string `json:"org_id"`
 		Email string `json:"email"`
@@ -236,6 +194,24 @@ func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	user, err := h.queries.GetUserByEmail(ctx, req.Email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to lookup user")
+		return
+	}
+	if _, err := h.queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: req.OrgID, UserID: user.ID}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusForbidden, "user is not a member of the org")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to verify org membership")
+		return
+	}
+
 	now := h.now()
 	magicLinkID, err := randomID("ml")
 	if err != nil {
@@ -248,25 +224,15 @@ func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	h.state.mu.Lock()
-	defer h.state.mu.Unlock()
-
-	userID, userExists := h.state.usersByEmail[req.Email]
-	if !userExists {
-		writeError(w, http.StatusNotFound, "user not found")
-		return
-	}
-	if _, ok := h.state.orgMembership[orgUserKey(req.OrgID, userID)]; !ok {
-		writeError(w, http.StatusForbidden, "user is not a member of the org")
-		return
-	}
-
-	h.state.magicLinks[magicLinkID] = magicLinkRecord{
+	if _, err := h.queries.CreateMagicLink(ctx, dbquery.CreateMagicLinkParams{
 		ID:        magicLinkID,
 		OrgID:     req.OrgID,
 		Email:     req.Email,
 		CodeHash:  hashValue(code),
 		ExpiresAt: now.Add(magicLinkTTL),
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create magic link")
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -277,6 +243,7 @@ func (h *controlHandler) handleMagicLinkRequest(w http.ResponseWriter, r *http.R
 }
 
 func (h *controlHandler) handleMagicLinkExchange(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	var req struct {
 		MagicLinkID string `json:"magic_link_id"`
 		Code        string `json:"code"`
@@ -285,7 +252,6 @@ func (h *controlHandler) handleMagicLinkExchange(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-
 	req.MagicLinkID = strings.TrimSpace(req.MagicLinkID)
 	req.Code = strings.TrimSpace(req.Code)
 	if req.MagicLinkID == "" || req.Code == "" {
@@ -294,59 +260,81 @@ func (h *controlHandler) handleMagicLinkExchange(w http.ResponseWriter, r *http.
 	}
 
 	now := h.now()
-
-	var (
-		userID      string
-		orgID       string
-		refreshID   string
-		sessionEnds = now.Add(sessionTTL)
-	)
-
-	h.state.mu.Lock()
-	link, ok := h.state.magicLinks[req.MagicLinkID]
-	if !ok || link.Consumed || now.After(link.ExpiresAt) {
-		h.state.mu.Unlock()
-		writeError(w, http.StatusUnauthorized, "invalid or expired magic link")
+	tx, err := h.beginTx(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	if hashValue(req.Code) != link.CodeHash {
-		h.state.mu.Unlock()
-		writeError(w, http.StatusUnauthorized, "invalid or expired magic link")
-		return
-	}
+	defer tx.Tx.Rollback()
 
-	link.Consumed = true
-	h.state.magicLinks[req.MagicLinkID] = link
-
-	existingUserID, ok := h.state.usersByEmail[link.Email]
-	if !ok {
-		h.state.mu.Unlock()
-		writeError(w, http.StatusUnauthorized, "user not found")
-		return
-	}
-	if _, ok := h.state.orgMembership[orgUserKey(link.OrgID, existingUserID)]; !ok {
-		h.state.mu.Unlock()
-		writeError(w, http.StatusForbidden, "user is not a member of the org")
+	link, err := tx.Queries.ConsumeMagicLinkByCode(ctx, dbquery.ConsumeMagicLinkByCodeParams{
+		ID:       req.MagicLinkID,
+		CodeHash: hashValue(req.Code),
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusUnauthorized, "invalid or expired magic link")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to consume magic link")
 		return
 	}
 
-	refreshID, _ = randomID("rt")
-	tokenMaterial, _ := randomID("rtk")
-	h.state.refreshTokens[refreshID] = refreshTokenRecord{
+	user, err := tx.Queries.GetUserByEmail(ctx, link.Email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusUnauthorized, "user not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve user")
+		return
+	}
+	if _, err := tx.Queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: link.OrgID, UserID: user.ID}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusForbidden, "user is not a member of the org")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to verify org membership")
+		return
+	}
+
+	refreshID, err := randomID("rt")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create refresh token")
+		return
+	}
+	sessionID, err := randomID("sess")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+	tokenMaterial, err := randomID("rtk")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create refresh token")
+		return
+	}
+	if _, err := tx.Queries.CreateRefreshToken(ctx, dbquery.CreateRefreshTokenParams{
 		ID:         refreshID,
 		OrgID:      link.OrgID,
-		UserID:     existingUserID,
+		UserID:     user.ID,
 		TokenHash:  hashValue(tokenMaterial),
+		SessionID:  sessionID,
+		DeviceInfo: sql.NullString{String: truncateDeviceInfo(r.UserAgent()), Valid: r.UserAgent() != ""},
 		ExpiresAt:  now.Add(refreshTTL),
-		LastUsedAt: now,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist refresh token")
+		return
 	}
-	userID = existingUserID
-	orgID = link.OrgID
-	h.state.mu.Unlock()
 
+	if err := tx.Tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to finalize login")
+		return
+	}
+
+	sessionEnds := now.Add(sessionTTL)
 	claims := auth.SessionClaims{
-		OrgID:          orgID,
-		UserID:         userID,
+		OrgID:          link.OrgID,
+		UserID:         user.ID,
 		RefreshTokenID: refreshID,
 		ExpiresAtUnix:  sessionEnds.Unix(),
 	}
@@ -356,58 +344,77 @@ func (h *controlHandler) handleMagicLinkExchange(w http.ResponseWriter, r *http.
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"org_id":     orgID,
-		"user_id":    userID,
+		"org_id":     link.OrgID,
+		"user_id":    user.ID,
 		"expires_at": sessionEnds.UTC().Format(time.RFC3339),
 	})
 }
 
 func (h *controlHandler) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	claims, ok := h.requireSession(w, r)
+	ctx := r.Context()
+	claims, ok := h.requireSession(ctx, w, r)
 	if !ok {
 		return
 	}
 
 	now := h.now()
+	tx, err := h.beginTx(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Tx.Rollback()
+
+	rows, err := tx.Queries.RevokeRefreshToken(ctx, dbquery.RevokeRefreshTokenParams{ID: claims.RefreshTokenID, OrgID: claims.OrgID})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to rotate refresh token")
+		return
+	}
+	if rows == 0 {
+		writeError(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	}
+
 	newRefreshID, err := randomID("rt")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to rotate refresh token")
 		return
 	}
-	newTokenMaterial, err := randomID("rtk")
+	sessionID, err := randomID("sess")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to rotate refresh token")
 		return
 	}
-
-	h.state.mu.Lock()
-	current, exists := h.state.refreshTokens[claims.RefreshTokenID]
-	if !exists || current.OrgID != claims.OrgID || current.UserID != claims.UserID || current.RevokedAt != nil || now.After(current.ExpiresAt) {
-		h.state.mu.Unlock()
-		writeError(w, http.StatusUnauthorized, "invalid refresh token")
+	tokenMaterial, err := randomID("rtk")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to rotate refresh token")
 		return
 	}
-	current.LastUsedAt = now
-	current.RevokedAt = &now
-	h.state.refreshTokens[claims.RefreshTokenID] = current
-	h.state.refreshTokens[newRefreshID] = refreshTokenRecord{
+	if _, err := tx.Queries.CreateRefreshToken(ctx, dbquery.CreateRefreshTokenParams{
 		ID:         newRefreshID,
 		OrgID:      claims.OrgID,
 		UserID:     claims.UserID,
-		TokenHash:  hashValue(newTokenMaterial),
+		TokenHash:  hashValue(tokenMaterial),
+		SessionID:  sessionID,
+		DeviceInfo: sql.NullString{String: truncateDeviceInfo(r.UserAgent()), Valid: r.UserAgent() != ""},
 		ExpiresAt:  now.Add(refreshTTL),
-		LastUsedAt: now,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist rotated refresh token")
+		return
 	}
-	h.state.mu.Unlock()
+
+	if err := tx.Tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to finalize refresh")
+		return
+	}
 
 	sessionEnds := now.Add(sessionTTL)
-	newClaims := auth.SessionClaims{
+	if err := h.setSessionCookie(w, auth.SessionClaims{
 		OrgID:          claims.OrgID,
 		UserID:         claims.UserID,
 		RefreshTokenID: newRefreshID,
 		ExpiresAtUnix:  sessionEnds.Unix(),
-	}
-	if err := h.setSessionCookie(w, newClaims, sessionEnds); err != nil {
+	}, sessionEnds); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to refresh session")
 		return
 	}
@@ -420,32 +427,40 @@ func (h *controlHandler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *controlHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
-	claims, ok := h.requireSession(w, r)
+	ctx := r.Context()
+	claims, ok := h.requireSession(ctx, w, r)
 	if !ok {
 		return
 	}
 
-	now := h.now()
-	h.state.mu.Lock()
-	if token, exists := h.state.refreshTokens[claims.RefreshTokenID]; exists && token.OrgID == claims.OrgID && token.UserID == claims.UserID && token.RevokedAt == nil {
-		token.RevokedAt = &now
-		token.LastUsedAt = now
-		h.state.refreshTokens[claims.RefreshTokenID] = token
-	}
-	h.state.mu.Unlock()
-
+	_, _ = h.queries.RevokeRefreshToken(ctx, dbquery.RevokeRefreshTokenParams{ID: claims.RefreshTokenID, OrgID: claims.OrgID})
 	h.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "logged_out"})
 }
 
 func (h *controlHandler) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
-	orgID := r.PathValue("org_id")
-	claims, ok := h.requireSession(w, r)
+	ctx := r.Context()
+	orgID := strings.TrimSpace(r.PathValue("org_id"))
+	claims, ok := h.requireSession(ctx, w, r)
 	if !ok {
 		return
 	}
 	if claims.OrgID != orgID {
 		writeError(w, http.StatusForbidden, "session org mismatch")
+		return
+	}
+
+	membership, err := h.queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: orgID, UserID: claims.UserID})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusForbidden, "not a member of org")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve membership")
+		return
+	}
+	if membership.Role != roleOrgOwner {
+		writeError(w, http.StatusForbidden, "only org owner can create teams")
 		return
 	}
 
@@ -468,43 +483,70 @@ func (h *controlHandler) handleCreateTeam(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	h.state.mu.Lock()
-	defer h.state.mu.Unlock()
+	tx, err := h.beginTx(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Tx.Rollback()
 
-	role, ok := h.state.orgRoleLocked(orgID, claims.UserID)
-	if !ok || role != roleOrgOwner {
-		writeError(w, http.StatusForbidden, "only org owner can create teams")
+	team, err := tx.Queries.CreateTeam(ctx, dbquery.CreateTeamParams{
+		ID:                 teamID,
+		OrgID:              orgID,
+		Name:               req.Name,
+		Column4:            nil,
+		RateLimitPerMinute: sql.NullInt32{},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create team")
+		return
+	}
+	if _, err := tx.Queries.UpsertTeamMembership(ctx, dbquery.UpsertTeamMembershipParams{OrgID: orgID, TeamID: teamID, UserID: claims.UserID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to attach owner to team")
 		return
 	}
 
-	h.state.teams[teamID] = teamRecord{
-		ID:    teamID,
-		OrgID: orgID,
-		Name:  req.Name,
-	}
-	h.state.teamMemberships[teamUserKey(orgID, teamID, claims.UserID)] = teamMembershipRecord{
-		OrgID:  orgID,
-		TeamID: teamID,
-		UserID: claims.UserID,
+	if err := tx.Tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit team creation")
+		return
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":     teamID,
-		"org_id": orgID,
-		"name":   req.Name,
+		"id":     team.ID,
+		"org_id": team.OrgID,
+		"name":   team.Name,
 	})
 }
 
 func (h *controlHandler) handleAddTeamMember(w http.ResponseWriter, r *http.Request) {
-	orgID := r.PathValue("org_id")
-	teamID := r.PathValue("team_id")
-
-	claims, ok := h.requireSession(w, r)
+	ctx := r.Context()
+	orgID := strings.TrimSpace(r.PathValue("org_id"))
+	teamID := strings.TrimSpace(r.PathValue("team_id"))
+	claims, ok := h.requireSession(ctx, w, r)
 	if !ok {
 		return
 	}
 	if claims.OrgID != orgID {
 		writeError(w, http.StatusForbidden, "session org mismatch")
+		return
+	}
+
+	if _, err := h.queries.GetTeamByID(ctx, dbquery.GetTeamByIDParams{ID: teamID, OrgID: orgID}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "team not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve team")
+		return
+	}
+
+	requesterMembership, err := h.queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: orgID, UserID: claims.UserID})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusForbidden, "not a member of org")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve requester membership")
 		return
 	}
 
@@ -518,7 +560,6 @@ func (h *controlHandler) handleAddTeamMember(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-
 	req.UserID = strings.TrimSpace(req.UserID)
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	req.Name = strings.TrimSpace(req.Name)
@@ -531,73 +572,68 @@ func (h *controlHandler) handleAddTeamMember(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	h.state.mu.Lock()
-	defer h.state.mu.Unlock()
-
-	team, exists := h.state.teams[teamID]
-	if !exists || team.OrgID != orgID {
-		writeError(w, http.StatusNotFound, "team not found")
-		return
-	}
-
-	requesterRole, requesterExists := h.state.orgRoleLocked(orgID, claims.UserID)
-	if !requesterExists {
-		writeError(w, http.StatusForbidden, "not a member of org")
-		return
-	}
-
-	isAllowed := requesterRole == roleOrgOwner || (requesterRole == roleTeamAdmin && h.state.hasTeamAdminScopeLocked(orgID, teamID, claims.UserID))
-	if !isAllowed {
-		writeError(w, http.StatusForbidden, "insufficient permissions for team membership changes")
-		return
-	}
-	if requesterRole != roleOrgOwner && req.Role != roleMember {
-		writeError(w, http.StatusForbidden, "team_admin can only add members with role member")
-		return
-	}
-
-	targetUserID := req.UserID
-	if targetUserID == "" {
-		if req.Email == "" {
-			writeError(w, http.StatusBadRequest, "user_id or email is required")
+	isOwner := requesterMembership.Role == roleOrgOwner
+	if !isOwner {
+		if requesterMembership.Role != roleTeamAdmin {
+			writeError(w, http.StatusForbidden, "insufficient permissions for team membership changes")
 			return
 		}
-		if existingID, ok := h.state.usersByEmail[req.Email]; ok {
-			targetUserID = existingID
-		} else {
-			newUserID, err := randomID("usr")
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to generate user ID")
-				return
-			}
-			name := req.Name
-			if name == "" {
-				name = strings.Split(req.Email, "@")[0]
-			}
-			h.state.users[newUserID] = userRecord{
-				ID:    newUserID,
-				Email: req.Email,
-				Name:  name,
-			}
-			h.state.usersByEmail[req.Email] = newUserID
-			targetUserID = newUserID
+		hasScope, err := h.queries.HasTeamAdminScope(ctx, dbquery.HasTeamAdminScopeParams{OrgID: orgID, TeamID: teamID, AdminUserID: claims.UserID})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to validate team admin scope")
+			return
 		}
-	} else {
-		if _, ok := h.state.users[targetUserID]; !ok {
+		if !hasScope {
+			writeError(w, http.StatusForbidden, "insufficient permissions for team membership changes")
+			return
+		}
+		if req.Role != roleMember {
+			writeError(w, http.StatusForbidden, "team_admin can only add members with role member")
+			return
+		}
+	}
+
+	tx, err := h.beginTx(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Tx.Rollback()
+
+	targetUserID, err := h.resolveTargetUser(ctx, tx.Queries, req.UserID, req.Email, req.Name)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "user not found")
 			return
 		}
+		if err == errMissingUserReference {
+			writeError(w, http.StatusBadRequest, "user_id or email is required")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve target user")
+		return
 	}
 
-	h.state.orgMembership[orgUserKey(orgID, targetUserID)] = membershipRecord{
+	if _, err := tx.Queries.UpsertOrgMembership(ctx, dbquery.UpsertOrgMembershipParams{
 		OrgID:  orgID,
 		UserID: targetUserID,
 		Role:   req.Role,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to upsert org membership")
+		return
 	}
-	h.state.teamMemberships[teamUserKey(orgID, teamID, targetUserID)] = teamMembershipRecord{
+	if _, err := tx.Queries.UpsertTeamMembership(ctx, dbquery.UpsertTeamMembershipParams{
 		OrgID:  orgID,
 		TeamID: teamID,
 		UserID: targetUserID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to upsert team membership")
+		return
+	}
+
+	if err := tx.Tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit team membership change")
+		return
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -609,11 +645,12 @@ func (h *controlHandler) handleAddTeamMember(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *controlHandler) handleAddTeamAdminScope(w http.ResponseWriter, r *http.Request) {
-	orgID := r.PathValue("org_id")
-	teamID := r.PathValue("team_id")
-	adminUserID := r.PathValue("user_id")
+	ctx := r.Context()
+	orgID := strings.TrimSpace(r.PathValue("org_id"))
+	teamID := strings.TrimSpace(r.PathValue("team_id"))
+	adminUserID := strings.TrimSpace(r.PathValue("user_id"))
 
-	claims, ok := h.requireSession(w, r)
+	claims, ok := h.requireSession(ctx, w, r)
 	if !ok {
 		return
 	}
@@ -622,35 +659,61 @@ func (h *controlHandler) handleAddTeamAdminScope(w http.ResponseWriter, r *http.
 		return
 	}
 
-	h.state.mu.Lock()
-	defer h.state.mu.Unlock()
-
-	role, ok := h.state.orgRoleLocked(orgID, claims.UserID)
-	if !ok || role != roleOrgOwner {
+	membership, err := h.queries.GetOrgMembership(ctx, dbquery.GetOrgMembershipParams{OrgID: orgID, UserID: claims.UserID})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusForbidden, "not a member of org")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve requester membership")
+		return
+	}
+	if membership.Role != roleOrgOwner {
 		writeError(w, http.StatusForbidden, "only org owner can assign team admin scopes")
 		return
 	}
-	team, teamExists := h.state.teams[teamID]
-	if !teamExists || team.OrgID != orgID {
-		writeError(w, http.StatusNotFound, "team not found")
+
+	if _, err := h.queries.GetTeamByID(ctx, dbquery.GetTeamByIDParams{ID: teamID, OrgID: orgID}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "team not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve team")
 		return
 	}
-	if _, userExists := h.state.users[adminUserID]; !userExists {
-		writeError(w, http.StatusNotFound, "user not found")
+	if _, err := h.queries.GetUserByID(ctx, adminUserID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve user")
 		return
 	}
 
-	h.state.orgMembership[orgUserKey(orgID, adminUserID)] = membershipRecord{
-		OrgID:  orgID,
-		UserID: adminUserID,
-		Role:   roleTeamAdmin,
+	tx, err := h.beginTx(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
 	}
-	h.state.teamMemberships[teamUserKey(orgID, teamID, adminUserID)] = teamMembershipRecord{
-		OrgID:  orgID,
-		TeamID: teamID,
-		UserID: adminUserID,
+	defer tx.Tx.Rollback()
+
+	if _, err := tx.Queries.UpsertOrgMembership(ctx, dbquery.UpsertOrgMembershipParams{OrgID: orgID, UserID: adminUserID, Role: roleTeamAdmin}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to promote team admin")
+		return
 	}
-	h.state.teamAdminScopes[scopeKey(orgID, teamID, adminUserID)] = struct{}{}
+	if _, err := tx.Queries.UpsertTeamMembership(ctx, dbquery.UpsertTeamMembershipParams{OrgID: orgID, TeamID: teamID, UserID: adminUserID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to attach team admin membership")
+		return
+	}
+	if _, err := tx.Queries.UpsertTeamAdminScope(ctx, dbquery.UpsertTeamAdminScopeParams{OrgID: orgID, TeamID: teamID, AdminUserID: adminUserID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to upsert team admin scope")
+		return
+	}
+
+	if err := tx.Tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit team admin scope")
+		return
+	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"org_id":        orgID,
@@ -659,7 +722,7 @@ func (h *controlHandler) handleAddTeamAdminScope(w http.ResponseWriter, r *http.
 	})
 }
 
-func (h *controlHandler) requireSession(w http.ResponseWriter, r *http.Request) (auth.SessionClaims, bool) {
+func (h *controlHandler) requireSession(ctx context.Context, w http.ResponseWriter, r *http.Request) (auth.SessionClaims, bool) {
 	var zero auth.SessionClaims
 
 	cookie, err := r.Cookie(sessionCookieName)
@@ -677,10 +740,17 @@ func (h *controlHandler) requireSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, "session expired")
 		return zero, false
 	}
-	h.state.mu.Lock()
-	token, ok := h.state.refreshTokens[claims.RefreshTokenID]
-	h.state.mu.Unlock()
-	if !ok || token.OrgID != claims.OrgID || token.UserID != claims.UserID || token.RevokedAt != nil || h.now().After(token.ExpiresAt) {
+
+	refreshToken, err := h.queries.GetRefreshTokenByID(ctx, dbquery.GetRefreshTokenByIDParams{ID: claims.RefreshTokenID, OrgID: claims.OrgID})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusUnauthorized, "session invalidated")
+			return zero, false
+		}
+		writeError(w, http.StatusInternalServerError, "failed to validate session")
+		return zero, false
+	}
+	if refreshToken.UserID != claims.UserID || refreshToken.RevokedAt.Valid || h.now().After(refreshToken.ExpiresAt) {
 		writeError(w, http.StatusUnauthorized, "session invalidated")
 		return zero, false
 	}
@@ -720,29 +790,77 @@ func (h *controlHandler) clearSessionCookie(w http.ResponseWriter) {
 	})
 }
 
-func (s *controlState) orgRoleLocked(orgID, userID string) (string, bool) {
-	m, ok := s.orgMembership[orgUserKey(orgID, userID)]
-	if !ok {
-		return "", false
+var errMissingUserReference = errors.New("missing user reference")
+
+func (h *controlHandler) resolveTargetUser(ctx context.Context, q *dbquery.Queries, userID, email, name string) (string, error) {
+	if userID != "" {
+		user, err := q.GetUserByID(ctx, userID)
+		if err != nil {
+			return "", err
+		}
+		return user.ID, nil
 	}
-	return m.Role, true
+	if email == "" {
+		return "", errMissingUserReference
+	}
+
+	user, err := q.GetUserByEmail(ctx, email)
+	if err == nil {
+		return user.ID, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+
+	if name == "" {
+		name = strings.Split(email, "@")[0]
+	}
+	newUserID, err := randomID("usr")
+	if err != nil {
+		return "", err
+	}
+	created, err := q.CreateUser(ctx, dbquery.CreateUserParams{
+		ID:    newUserID,
+		Email: email,
+		Name:  name,
+	})
+	if err != nil {
+		return "", err
+	}
+	return created.ID, nil
 }
 
-func (s *controlState) hasTeamAdminScopeLocked(orgID, teamID, userID string) bool {
-	_, ok := s.teamAdminScopes[scopeKey(orgID, teamID, userID)]
-	return ok
+func (h *controlHandler) ensureUserByEmail(ctx context.Context, q *dbquery.Queries, email, name string) (string, error) {
+	user, err := q.GetUserByEmail(ctx, email)
+	if err == nil {
+		return user.ID, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+
+	newUserID, err := randomID("usr")
+	if err != nil {
+		return "", err
+	}
+	created, err := q.CreateUser(ctx, dbquery.CreateUserParams{ID: newUserID, Email: email, Name: name})
+	if err != nil {
+		return "", err
+	}
+	return created.ID, nil
 }
 
-func orgUserKey(orgID, userID string) string {
-	return orgID + ":" + userID
+type txQueries struct {
+	Tx      *sql.Tx
+	Queries *dbquery.Queries
 }
 
-func teamUserKey(orgID, teamID, userID string) string {
-	return orgID + ":" + teamID + ":" + userID
-}
-
-func scopeKey(orgID, teamID, userID string) string {
-	return orgID + ":" + teamID + ":" + userID
+func (h *controlHandler) beginTx(ctx context.Context) (*txQueries, error) {
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &txQueries{Tx: tx, Queries: h.queries.WithTx(tx)}, nil
 }
 
 func decodeJSONBody(r *http.Request, out any) error {
@@ -792,4 +910,11 @@ func randomCode() (string, error) {
 func hashValue(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+func truncateDeviceInfo(input string) string {
+	if len(input) <= 256 {
+		return input
+	}
+	return input[:256]
 }

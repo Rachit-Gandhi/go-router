@@ -7,10 +7,11 @@ import (
 )
 
 func TestHealthz(t *testing.T) {
+	tc := newTestHandler(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/control/healthz", nil)
 	rec := httptest.NewRecorder()
 
-	NewHandler().ServeHTTP(rec, req)
+	tc.handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -21,10 +22,11 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestHealthzMethodNotAllowed(t *testing.T) {
+	tc := newTestHandler(t)
 	req := httptest.NewRequest(http.MethodPost, "/v1/control/healthz", nil)
 	rec := httptest.NewRecorder()
 
-	NewHandler().ServeHTTP(rec, req)
+	tc.handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, rec.Code)
