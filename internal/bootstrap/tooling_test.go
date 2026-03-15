@@ -3,7 +3,7 @@ package bootstrap
 import (
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 	"testing"
 )
 
@@ -21,7 +21,12 @@ func TestMakefileHasDatabaseToolingTargets(t *testing.T) {
 		"migrate-down:",
 	}
 	for _, target := range requiredTargets {
-		if !strings.Contains(got, target) {
+		pattern := "(?m)^" + regexp.QuoteMeta(target) + "$"
+		matched, err := regexp.MatchString(pattern, got)
+		if err != nil {
+			t.Fatalf("invalid regexp %q: %v", pattern, err)
+		}
+		if !matched {
 			t.Fatalf("expected makefile to include %s target", target)
 		}
 	}

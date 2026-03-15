@@ -25,11 +25,12 @@ func (q *Queries) CreateHealthCheck(ctx context.Context, service string) (Health
 const listHealthChecks = `-- name: ListHealthChecks :many
 SELECT id, service, checked_at
 FROM health_checks
-ORDER BY checked_at DESC
+ORDER BY checked_at DESC, id DESC
+LIMIT $1
 `
 
-func (q *Queries) ListHealthChecks(ctx context.Context) ([]HealthCheck, error) {
-	rows, err := q.db.QueryContext(ctx, listHealthChecks)
+func (q *Queries) ListHealthChecks(ctx context.Context, limit int32) ([]HealthCheck, error) {
+	rows, err := q.db.QueryContext(ctx, listHealthChecks, limit)
 	if err != nil {
 		return nil, err
 	}

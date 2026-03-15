@@ -6,4 +6,5 @@ RETURNING id, service, checked_at;
 -- name: ListHealthChecks :many
 SELECT id, service, checked_at
 FROM health_checks
-ORDER BY checked_at DESC;
+ORDER BY checked_at DESC, id DESC
+LIMIT $1;

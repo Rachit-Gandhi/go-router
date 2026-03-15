@@ -3,13 +3,23 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MEMORY_FILE="${REPO_ROOT}/memory.md"
+MODE="${1:---check}"
 
 if ! git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
   echo "not a git repo: ${REPO_ROOT}" >&2
   exit 1
 fi
 
+if [[ "${MODE}" != "--check" && "${MODE}" != "--write" ]]; then
+  echo "usage: $0 [--check|--write]" >&2
+  exit 1
+fi
+
 if [[ ! -f "${MEMORY_FILE}" ]]; then
+  if [[ "${MODE}" == "--check" ]]; then
+    echo "memory.md is missing; create it before committing." >&2
+    exit 1
+  fi
   cat > "${MEMORY_FILE}" <<'EOF'
 # Project Memory
 
@@ -23,6 +33,10 @@ START_MARK="<!-- COMMIT_JOURNAL_START -->"
 END_MARK="<!-- COMMIT_JOURNAL_END -->"
 
 if ! grep -q "${START_MARK}" "${MEMORY_FILE}" || ! grep -q "${END_MARK}" "${MEMORY_FILE}"; then
+  if [[ "${MODE}" == "--check" ]]; then
+    echo "memory.md is missing commit journal markers; add them before committing." >&2
+    exit 1
+  fi
   cat >> "${MEMORY_FILE}" <<'EOF'
 
 ## Commit Journal
@@ -40,6 +54,17 @@ ENTRY="- ${DATE_UTC} ${HASH}: ${SUBJECT} [files: ${FILES}]"
 
 if grep -Fq "${HASH}:" "${MEMORY_FILE}"; then
   exit 0
+fi
+
+if [[ "${MODE}" == "--check" ]]; then
+  cat >&2 <<EOF
+memory.md commit journal is missing ${HASH}.
+Run:
+  ${REPO_ROOT}/scripts/update_memory_after_commit.sh --write
+  git add ${MEMORY_FILE}
+  git commit --amend --no-edit
+EOF
+  exit 1
 fi
 
 TMP_FILE="$(mktemp)"

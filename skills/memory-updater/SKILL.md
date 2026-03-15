@@ -30,8 +30,11 @@ This configures `core.hooksPath=.githooks` and enables the post-commit updater.
 - Repo conventions
 
 2. Allow automatic commit journaling:
-- `.githooks/post-commit` runs `scripts/update_memory_after_commit.sh`.
-- Script inserts latest commit summary under `## Commit Journal`.
+- `.githooks/post-commit` runs `scripts/update_memory_after_commit.sh --check`.
+- If an entry is missing, run:
+  - `scripts/update_memory_after_commit.sh --write`
+  - `git add memory.md`
+  - `git commit --amend --no-edit`
 
 3. When commit changes architecture or requirements:
 - Update relevant memory sections manually in the same commit.
