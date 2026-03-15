@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -25,6 +27,20 @@ type routerFixture struct {
 	OwnerUserID    string
 	PlaintextKey   string
 	StoredAPIKeyID string
+}
+
+type usageLogRecord struct {
+	OrgID              string
+	TeamID             string
+	UserID             string
+	APIKeyID           string
+	Provider           string
+	Model              string
+	RequestTokens      int32
+	ResponseTokens     int32
+	LatencyMs          int32
+	StatusCode         int32
+	RequestFingerprint sql.NullString
 }
 
 func TestChatCompletionsContract(t *testing.T) {
@@ -220,6 +236,151 @@ func TestChatCompletionsRejectsInvalidAPIKey(t *testing.T) {
 	requireStatus(t, rec, http.StatusUnauthorized)
 }
 
+func TestChatCompletionsWritesUsageLogOnSuccess(t *testing.T) {
+	tr := newTestRouterHandler(t)
+	fixture := seedRouterFixture(t, tr.db,
+		[]modelPolicy{
+			{Provider: "openai", Model: "gpt-4o-mini", Allowed: true},
+			{Provider: "openai", Model: "gpt-4o", Allowed: true},
+		},
+		nil,
+	)
+
+	rec := performRouterChatRequest(t, tr.handler, fixture.PlaintextKey, map[string]any{
+		"model": "auto",
+		"messages": []map[string]any{
+			{"role": "user", "content": "record this usage row"},
+		},
+	})
+	requireStatus(t, rec, http.StatusOK)
+
+	var body map[string]any
+	decodeJSONResponse(t, rec, &body)
+	model, _ := body["model"].(string)
+	if model == "" {
+		t.Fatalf("expected response model, got %#v", body)
+	}
+
+	usage := latestUsageLogForOrg(t, tr.db, fixture.OrgID)
+	if usage.OrgID != fixture.OrgID || usage.TeamID != fixture.TeamID || usage.UserID != fixture.OwnerUserID {
+		t.Fatalf("unexpected tenant identity in usage row: %#v", usage)
+	}
+	if usage.APIKeyID != fixture.StoredAPIKeyID {
+		t.Fatalf("expected api_key_id %q, got %q", fixture.StoredAPIKeyID, usage.APIKeyID)
+	}
+	if usage.Provider != "openai" || usage.Model != model {
+		t.Fatalf("unexpected provider/model in usage row: provider=%q model=%q", usage.Provider, usage.Model)
+	}
+	if usage.StatusCode != http.StatusOK {
+		t.Fatalf("expected status_code %d, got %d", http.StatusOK, usage.StatusCode)
+	}
+	if usage.RequestTokens < 1 || usage.ResponseTokens < 1 {
+		t.Fatalf("expected positive token counts, got request=%d response=%d", usage.RequestTokens, usage.ResponseTokens)
+	}
+	if usage.LatencyMs < 0 {
+		t.Fatalf("expected non-negative latency, got %d", usage.LatencyMs)
+	}
+	if !usage.RequestFingerprint.Valid || usage.RequestFingerprint.String == "" {
+		t.Fatalf("expected request fingerprint to be populated: %#v", usage)
+	}
+}
+
+func TestChatCompletionsWritesUsageLogOnUpstreamFailure(t *testing.T) {
+	tr := newTestRouterHandlerWithAdapters(t, map[string]completionAdapter{
+		"openai": failingAdapter{},
+	})
+	fixture := seedRouterFixture(t, tr.db,
+		[]modelPolicy{{Provider: "openai", Model: "gpt-4o-mini", Allowed: true}},
+		nil,
+	)
+
+	rec := performRouterChatRequest(t, tr.handler, fixture.PlaintextKey, map[string]any{
+		"model": "auto",
+		"messages": []map[string]any{
+			{"role": "user", "content": "this should fail upstream"},
+		},
+	})
+	requireStatus(t, rec, http.StatusBadGateway)
+
+	var body map[string]any
+	decodeJSONResponse(t, rec, &body)
+	if body["error"] != "upstream completion failed" {
+		t.Fatalf("expected upstream completion failed error, got %#v", body["error"])
+	}
+
+	usage := latestUsageLogForOrg(t, tr.db, fixture.OrgID)
+	if usage.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected usage status_code %d, got %d", http.StatusBadGateway, usage.StatusCode)
+	}
+	if usage.Provider != "openai" || usage.Model != "gpt-4o-mini" {
+		t.Fatalf("unexpected provider/model for failed usage row: provider=%q model=%q", usage.Provider, usage.Model)
+	}
+	if usage.RequestTokens < 1 {
+		t.Fatalf("expected positive request tokens, got %d", usage.RequestTokens)
+	}
+	if usage.ResponseTokens != 0 {
+		t.Fatalf("expected zero response tokens for failed call, got %d", usage.ResponseTokens)
+	}
+	if usage.LatencyMs < 0 {
+		t.Fatalf("expected non-negative latency, got %d", usage.LatencyMs)
+	}
+}
+
+func TestChatCompletionsAPIKeyCannotUseAnotherOrgPolicies(t *testing.T) {
+	tr := newTestRouterHandler(t)
+	fixture := seedRouterFixture(t, tr.db,
+		[]modelPolicy{{Provider: "openai", Model: "gpt-4o-mini", Allowed: true}},
+		nil,
+	)
+
+	q := dbquery.New(tr.db)
+	if _, err := q.CreateUser(t.Context(), dbquery.CreateUserParams{
+		ID:    "usr_other_owner",
+		Email: "other-owner@example.com",
+		Name:  "Other Owner",
+	}); err != nil {
+		t.Fatalf("create other owner user: %v", err)
+	}
+	if _, err := q.CreateOrg(t.Context(), dbquery.CreateOrgParams{
+		ID:          "org_other",
+		Name:        "Other Org",
+		OwnerUserID: "usr_other_owner",
+	}); err != nil {
+		t.Fatalf("create other org: %v", err)
+	}
+	if _, err := q.UpsertOrgMembership(t.Context(), dbquery.UpsertOrgMembershipParams{
+		OrgID:  "org_other",
+		UserID: "usr_other_owner",
+		Role:   "org_owner",
+	}); err != nil {
+		t.Fatalf("create other owner membership: %v", err)
+	}
+	if _, err := q.UpsertOrgModelPolicy(t.Context(), dbquery.UpsertOrgModelPolicyParams{
+		OrgID:     "org_other",
+		Provider:  "openai",
+		Model:     "gpt-4o",
+		IsAllowed: true,
+	}); err != nil {
+		t.Fatalf("upsert other org policy: %v", err)
+	}
+
+	deniedRec := performRouterChatRequest(t, tr.handler, fixture.PlaintextKey, map[string]any{
+		"model": "gpt-4o",
+		"messages": []map[string]any{
+			{"role": "user", "content": "try to use another org model"},
+		},
+	})
+	requireStatus(t, deniedRec, http.StatusForbidden)
+
+	allowedRec := performRouterChatRequest(t, tr.handler, fixture.PlaintextKey, map[string]any{
+		"model": "gpt-4o-mini",
+		"messages": []map[string]any{
+			{"role": "user", "content": "use own org model"},
+		},
+	})
+	requireStatus(t, allowedRec, http.StatusOK)
+}
+
 func TestChatCompletionsAllowsRequestedModelBeyondFirstPolicyPage(t *testing.T) {
 	tr := newTestRouterHandler(t)
 
@@ -354,4 +515,41 @@ func requireStatus(t *testing.T, rec *httptest.ResponseRecorder, expected int) {
 	if rec.Code != expected {
 		t.Fatalf("expected status %d, got %d: %s", expected, rec.Code, rec.Body.String())
 	}
+}
+
+func latestUsageLogForOrg(t *testing.T, db *sql.DB, orgID string) usageLogRecord {
+	t.Helper()
+
+	const usageSQL = `
+SELECT org_id, team_id, user_id, api_key_id, provider, model, request_tokens, response_tokens, latency_ms, status_code, request_fingerprint
+FROM usage_logs
+WHERE org_id = $1
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+`
+
+	var usage usageLogRecord
+	err := db.QueryRowContext(t.Context(), usageSQL, orgID).Scan(
+		&usage.OrgID,
+		&usage.TeamID,
+		&usage.UserID,
+		&usage.APIKeyID,
+		&usage.Provider,
+		&usage.Model,
+		&usage.RequestTokens,
+		&usage.ResponseTokens,
+		&usage.LatencyMs,
+		&usage.StatusCode,
+		&usage.RequestFingerprint,
+	)
+	if err != nil {
+		t.Fatalf("query usage row for org %q: %v", orgID, err)
+	}
+	return usage
+}
+
+type failingAdapter struct{}
+
+func (a failingAdapter) Complete(_ context.Context, _ adapterCompletionRequest) (adapterCompletionResult, error) {
+	return adapterCompletionResult{}, errors.New("upstream adapter boom")
 }

@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	dbquery "github.com/Rachit-Gandhi/go-router/db/query"
+	"github.com/Rachit-Gandhi/go-router/internal/httputil"
 	"github.com/Rachit-Gandhi/go-router/internal/store"
 	"github.com/pressly/goose/v3"
 )
@@ -41,16 +43,35 @@ func TestMain(m *testing.M) {
 type testRouterHandler struct {
 	db      *sql.DB
 	handler http.Handler
+	router  *routerHandler
 }
 
 func newTestRouterHandler(t *testing.T) *testRouterHandler {
 	t.Helper()
+	return newTestRouterHandlerWithAdapters(t, nil)
+}
+
+func newTestRouterHandlerWithAdapters(t *testing.T, adapters map[string]completionAdapter) *testRouterHandler {
+	t.Helper()
 	db := ensurePostgres(t)
 	resetPostgresData(t, db)
+	if adapters == nil {
+		adapters = defaultAdapters()
+	}
+
+	router := &routerHandler{
+		queries:  dbquery.New(db),
+		adapters: adapters,
+		now:      time.Now,
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/router/healthz", httputil.HealthHandler())
+	mux.HandleFunc("POST /v1/router/chat/completions", router.handleChatCompletions)
 
 	return &testRouterHandler{
 		db:      db,
-		handler: NewHandlerWithDB(db, time.Now),
+		handler: mux,
+		router:  router,
 	}
 }
 
