@@ -74,9 +74,16 @@ export async function proxyRequest(
     }
 
     const upstream = await fetch(targetUrl, init);
-    const body = await upstream.arrayBuffer();
     const incomingHeaders = sanitizeIncomingHeaders(upstream.headers);
 
+    if (upstream.body) {
+      return new NextResponse(upstream.body, {
+        status: upstream.status,
+        headers: incomingHeaders
+      });
+    }
+
+    const body = await upstream.arrayBuffer();
     return new NextResponse(body, {
       status: upstream.status,
       headers: incomingHeaders

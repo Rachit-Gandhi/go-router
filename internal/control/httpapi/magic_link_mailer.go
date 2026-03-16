@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -198,37 +199,23 @@ func (s *fileMagicLinkSender) SendMagicLink(ctx context.Context, msg MagicLinkMe
 		link = u.String()
 	}
 
-	var b strings.Builder
-	b.WriteString("timestamp=")
-	b.WriteString(time.Now().UTC().Format(time.RFC3339))
-	b.WriteString("\n")
-	b.WriteString("to=")
-	b.WriteString(msg.ToEmail)
-	b.WriteString("\n")
-	b.WriteString("magic_link_id=")
-	b.WriteString(msg.MagicLinkID)
-	b.WriteString("\n")
-	b.WriteString("code=")
-	b.WriteString(msg.Code)
-	b.WriteString("\n")
-	b.WriteString("org_id=")
-	b.WriteString(msg.OrgID)
-	b.WriteString("\n")
-	b.WriteString("user_id=")
-	b.WriteString(msg.UserID)
-	b.WriteString("\n")
-	b.WriteString("role=")
-	b.WriteString(msg.Role)
-	b.WriteString("\n")
-	b.WriteString("expires_at=")
-	b.WriteString(msg.ExpiresAt.UTC().Format(time.RFC3339))
-	b.WriteString("\n")
-	if link != "" {
-		b.WriteString("link=")
-		b.WriteString(link)
-		b.WriteString("\n")
+	entry := map[string]string{
+		"timestamp":     time.Now().UTC().Format(time.RFC3339),
+		"to":            msg.ToEmail,
+		"magic_link_id": msg.MagicLinkID,
+		"code":          msg.Code,
+		"org_id":        msg.OrgID,
+		"user_id":       msg.UserID,
+		"role":          msg.Role,
+		"expires_at":    msg.ExpiresAt.UTC().Format(time.RFC3339),
 	}
-	b.WriteString("---\n")
+	if link != "" {
+		entry["link"] = link
+	}
+	record, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal magic link log entry: %w", err)
+	}
 
 	if dir := filepath.Dir(s.path); dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -245,7 +232,7 @@ func (s *fileMagicLinkSender) SendMagicLink(ctx context.Context, msg MagicLinkMe
 	}
 	defer file.Close()
 
-	if _, err := file.WriteString(b.String()); err != nil {
+	if _, err := file.WriteString(string(record) + "\n"); err != nil {
 		return fmt.Errorf("write magic link log file: %w", err)
 	}
 	return nil

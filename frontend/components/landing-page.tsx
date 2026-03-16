@@ -422,6 +422,7 @@ function FAQSection() {
                 className="overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900/50 backdrop-blur-sm"
               >
                 <button
+                  type="button"
                   onClick={() => setOpenIndex(openIndex === index ? null : index)}
                   className="flex w-full items-center justify-between px-6 py-5 text-left transition-colors hover:bg-neutral-800/30"
                 >
@@ -623,6 +624,33 @@ function FeaturesSection() {
 }
 
 function ContactSection() {
+  const [contactBusy, setContactBusy] = useState(false);
+  const [contactMessage, setContactMessage] = useState<string | null>(null);
+  const [contactError, setContactError] = useState<string | null>(null);
+
+  const handleContactSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setContactError(null);
+    setContactMessage(null);
+
+    const formData = new FormData(event.currentTarget);
+    const email = String(formData.get("email") ?? "").trim();
+    const message = String(formData.get("message") ?? "").trim();
+
+    if (!email || !message) {
+      setContactError("Email and message are required.");
+      return;
+    }
+
+    setContactBusy(true);
+    try {
+      setContactMessage("Message received. We will get back to you soon.");
+      event.currentTarget.reset();
+    } finally {
+      setContactBusy(false);
+    }
+  };
+
   return (
     <section className="relative overflow-hidden bg-neutral-950 py-24">
       <div className="absolute inset-0 opacity-20">
@@ -674,6 +702,7 @@ function ContactSection() {
           </motion.div>
 
           <motion.form
+            onSubmit={(event) => void handleContactSubmit(event)}
             initial={{ opacity: 0, x: 20 }}
             whileInView={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.6 }}
@@ -688,6 +717,7 @@ function ContactSection() {
                 <Input
                   type="text"
                   id="firstname"
+                  name="firstname"
                   placeholder="John"
                   className="border-neutral-800 bg-neutral-950/50 text-neutral-100 placeholder:text-neutral-600"
                 />
@@ -699,6 +729,7 @@ function ContactSection() {
                 <Input
                   type="text"
                   id="lastname"
+                  name="lastname"
                   placeholder="Doe"
                   className="border-neutral-800 bg-neutral-950/50 text-neutral-100 placeholder:text-neutral-600"
                 />
@@ -711,6 +742,7 @@ function ContactSection() {
               <Input
                 type="email"
                 id="email"
+                name="email"
                 placeholder="john@company.com"
                 className="border-neutral-800 bg-neutral-950/50 text-neutral-100 placeholder:text-neutral-600"
               />
@@ -722,6 +754,7 @@ function ContactSection() {
               <Input
                 type="text"
                 id="company"
+                name="company"
                 placeholder="Your Company"
                 className="border-neutral-800 bg-neutral-950/50 text-neutral-100 placeholder:text-neutral-600"
               />
@@ -732,12 +765,19 @@ function ContactSection() {
               </Label>
               <Textarea
                 id="message"
+                name="message"
                 placeholder="Tell us about your AI observability needs..."
                 className="min-h-[120px] border-neutral-800 bg-neutral-950/50 text-neutral-100 placeholder:text-neutral-600"
               />
             </div>
-            <Button className="w-full bg-neutral-100 font-semibold text-neutral-900 hover:bg-white">
-              Send Message
+            {contactMessage ? <p className="text-sm text-green-300">{contactMessage}</p> : null}
+            {contactError ? <p className="text-sm text-red-300">{contactError}</p> : null}
+            <Button
+              type="submit"
+              disabled={contactBusy}
+              className="w-full bg-neutral-100 font-semibold text-neutral-900 hover:bg-white"
+            >
+              {contactBusy ? "Sending..." : "Send Message"}
             </Button>
           </motion.form>
         </div>

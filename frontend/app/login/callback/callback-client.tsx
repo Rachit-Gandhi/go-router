@@ -95,6 +95,7 @@ export function MagicLinkCallbackClient() {
 
     return () => {
       cancelled = true;
+      hasStarted.current = false;
       controller.abort();
       window.clearTimeout(timeoutID);
     };

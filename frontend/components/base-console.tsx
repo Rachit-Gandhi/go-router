@@ -879,6 +879,7 @@ function TeamsTab({
                   value={memberName}
                   onChange={(event) => setMemberName(event.target.value)}
                   placeholder="username"
+                  aria-label="Member username"
                   className="rounded-lg border border-[#2a2a2a] bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:border-[#3a3a3a] focus:outline-none"
                 />
                 <input
@@ -886,6 +887,7 @@ function TeamsTab({
                   value={memberEmail}
                   onChange={(event) => setMemberEmail(event.target.value)}
                   placeholder="user email"
+                  aria-label="Member email address"
                   className="rounded-lg border border-[#2a2a2a] bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:border-[#3a3a3a] focus:outline-none"
                 />
                 <input
@@ -893,6 +895,7 @@ function TeamsTab({
                   value={memberUserID}
                   onChange={(event) => setMemberUserID(event.target.value)}
                   placeholder="existing user_id (optional)"
+                  aria-label="Existing member user ID"
                   className="rounded-lg border border-[#2a2a2a] bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:border-[#3a3a3a] focus:outline-none"
                 />
               </div>
@@ -914,6 +917,7 @@ function TeamsTab({
                       value={promoteUserID}
                       onChange={(event) => setPromoteUserID(event.target.value)}
                       placeholder="user_id to promote"
+                      aria-label="User ID to promote as team admin"
                       className="rounded-lg border border-[#2a2a2a] bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:border-[#3a3a3a] focus:outline-none"
                     />
                     <Button
@@ -1025,6 +1029,7 @@ function TeamsTab({
               value={newTeamName}
               onChange={(event) => setNewTeamName(event.target.value)}
               placeholder="new-team"
+              aria-label="New team name"
               className="rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] px-3 py-2 text-sm text-white focus:border-[#3a3a3a] focus:outline-none"
             />
             <Button variant="primary" size="sm" onClick={() => void submitCreateTeam()} disabled={creating}>
@@ -1166,6 +1171,7 @@ function ApiKeysTab({
               placeholder="Search keys..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
+              aria-label="Search API keys"
               className="w-full rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] py-2 pl-10 pr-4 text-sm text-white focus:border-[#3a3a3a] focus:outline-none md:w-64"
             />
           </div>
@@ -1173,6 +1179,7 @@ function ApiKeysTab({
             <select
               value={selectedTeamID}
               onChange={(event) => setSelectedTeamID(event.target.value)}
+              aria-label="Team for API key creation"
               className="rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] px-3 py-2 text-sm text-white focus:border-[#3a3a3a] focus:outline-none"
             >
               <option value="">Select team</option>
@@ -1187,6 +1194,7 @@ function ApiKeysTab({
               value={targetUserID}
               onChange={(event) => setTargetUserID(event.target.value)}
               placeholder="target user_id"
+              aria-label="Target user ID for API key creation"
               className="rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] px-3 py-2 text-sm text-white focus:border-[#3a3a3a] focus:outline-none"
             />
             <Button variant="primary" size="sm" onClick={() => void submitCreateKey()} disabled={creating}>
@@ -1439,6 +1447,7 @@ function ModelsTab({
             <select
               value={provider}
               onChange={(event) => setProvider(event.target.value)}
+              aria-label="Model provider"
               className="rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] px-3 py-2 text-sm text-white focus:border-[#3a3a3a] focus:outline-none"
             >
               {routerSupportedProviders.map((item) => (
@@ -1452,6 +1461,7 @@ function ModelsTab({
               value={providerAPIKey}
               onChange={(event) => setProviderAPIKey(event.target.value)}
               placeholder="provider api key"
+              aria-label="Provider API key"
               className="rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] px-3 py-2 text-sm text-white focus:border-[#3a3a3a] focus:outline-none"
             />
             <input
@@ -1459,6 +1469,7 @@ function ModelsTab({
               value={providerKekID}
               onChange={(event) => setProviderKekID(event.target.value)}
               placeholder="key kek id"
+              aria-label="Provider key encryption key ID"
               className="rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] px-3 py-2 text-sm text-white focus:border-[#3a3a3a] focus:outline-none"
             />
             <Button variant="primary" onClick={() => void submitProviderKey()} disabled={writingProvider}>
@@ -1509,6 +1520,7 @@ function ModelsTab({
               rows={8}
               value={orgPolicyJSON}
               onChange={(event) => setOrgPolicyJSON(event.target.value)}
+              aria-label="Organization policy JSON"
               className="w-full rounded-lg border border-[#2a2a2a] bg-[#0f0f0f] p-3 font-mono text-xs text-white focus:border-[#3a3a3a] focus:outline-none"
             />
             <Button variant="primary" onClick={() => void submitOrgPolicies()} disabled={writingOrgPolicy}>
@@ -1526,6 +1538,7 @@ function ModelsTab({
               <select
                 value={policyTeamID}
                 onChange={(event) => setPolicyTeamID(event.target.value)}
+                aria-label="Team for policy update"
                 className="rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] px-3 py-2 text-sm text-white focus:border-[#3a3a3a] focus:outline-none"
               >
                 {teams.map((team) => (
@@ -1542,6 +1555,7 @@ function ModelsTab({
               rows={8}
               value={teamPolicyJSON}
               onChange={(event) => setTeamPolicyJSON(event.target.value)}
+              aria-label="Team policy JSON"
               className="w-full rounded-lg border border-[#2a2a2a] bg-[#0f0f0f] p-3 font-mono text-xs text-white focus:border-[#3a3a3a] focus:outline-none"
             />
           </div>
