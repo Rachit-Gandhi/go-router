@@ -6,12 +6,6 @@ import { useEffect, useRef, useState } from "react";
 
 type ExchangeState = "working" | "success" | "error";
 
-type ExchangeResponse = {
-  org_id?: string;
-  user_id?: string;
-  role?: string;
-};
-
 function parseErrorMessage(raw: string, status: number): string {
   if (!raw) {
     return `Exchange failed with HTTP ${status}`;
@@ -35,7 +29,6 @@ export function MagicLinkCallbackClient() {
   const params = useSearchParams();
   const [state, setState] = useState<ExchangeState>("working");
   const [message, setMessage] = useState("Verifying magic link...");
-  const [exchange, setExchange] = useState<ExchangeResponse | null>(null);
   const hasStarted = useRef(false);
   const magicLinkID = params.get("magic_link_id")?.trim() ?? "";
   const code = params.get("code")?.trim() ?? "";
@@ -75,17 +68,9 @@ export function MagicLinkCallbackClient() {
           throw new Error(parseErrorMessage(bodyText, response.status));
         }
 
-        let body: ExchangeResponse = {};
-        try {
-          body = JSON.parse(bodyText) as ExchangeResponse;
-        } catch {
-          body = {};
-        }
-
         if (cancelled) {
           return;
         }
-        setExchange(body);
         setState("success");
         setMessage("Login successful. Redirecting to console...");
 
@@ -127,9 +112,6 @@ export function MagicLinkCallbackClient() {
       {state === "success" ? (
         <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-left text-sm text-emerald-900">
           <p>Session established.</p>
-          {exchange?.org_id ? <p>org_id: {exchange.org_id}</p> : null}
-          {exchange?.user_id ? <p>user_id: {exchange.user_id}</p> : null}
-          {exchange?.role ? <p>role: {exchange.role}</p> : null}
         </div>
       ) : null}
 

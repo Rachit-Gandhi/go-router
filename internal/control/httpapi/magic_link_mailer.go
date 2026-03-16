@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/smtp"
 	"net/url"
 	"os"
@@ -79,6 +80,7 @@ func newMagicLinkSenderFromEnv() (MagicLinkSender, error) {
 	if path == "" {
 		path = "control_magic_links.txt"
 	}
+	log.Printf("WARN: Using file-based magic link delivery to %s - not recommended for production", path)
 
 	return &fileMagicLinkSender{
 		path:    path,

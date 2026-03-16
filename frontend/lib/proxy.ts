@@ -56,9 +56,10 @@ export async function proxyRequest(
   baseUrl: string,
   pathSegments: string[]
 ): Promise<NextResponse> {
+  let targetUrl = "";
   try {
     const path = pathSegments.map((segment) => encodeURIComponent(segment)).join("/");
-    const targetUrl = `${normalizeBase(baseUrl)}/${path}${request.nextUrl.search}`;
+    targetUrl = `${normalizeBase(baseUrl)}/${path}${request.nextUrl.search}`;
     const outgoingHeaders = sanitizeOutgoingHeaders(request.headers);
 
     const init: RequestInit = {
@@ -69,7 +70,7 @@ export async function proxyRequest(
     };
 
     if (request.method !== "GET" && request.method !== "HEAD") {
-      init.body = await request.text();
+      init.body = await request.arrayBuffer();
     }
 
     const upstream = await fetch(targetUrl, init);
@@ -82,6 +83,13 @@ export async function proxyRequest(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "proxy request failed";
+    console.error("[proxy] upstream request failed", {
+      message,
+      method: request.method,
+      requestUrl: request.nextUrl.toString(),
+      targetUrl,
+      error
+    });
     return NextResponse.json(
       {
         error: message

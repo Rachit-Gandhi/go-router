@@ -99,17 +99,21 @@ function SignupModal({ open, onClose }: { open: boolean; onClose: () => void }) 
       }
 
       setOrgId(createdOrgId);
-
-      await postJSON("/v1/control/auth/magic-link/request", {
-        org_id: createdOrgId,
-        email: orgEmail
-      });
-
-      setOrgMessage(`Signup started. Check ${orgEmail} for the email link.`);
       if (!userEmail) {
         setUserEmail(orgEmail);
       }
       setActiveForm("user");
+
+      try {
+        await postJSON("/v1/control/auth/magic-link/request", {
+          org_id: createdOrgId,
+          email: orgEmail
+        });
+        setOrgMessage(`Signup started. Check ${orgEmail} for the email link.`);
+      } catch (error) {
+        setOrgMessage("Organization created. Retry sending the sign-in link below.");
+        setOrgError(error instanceof Error ? error.message : "Unable to send sign-in link.");
+      }
     } catch (error) {
       setOrgError(error instanceof Error ? error.message : "Unable to start organization signup.");
     } finally {
@@ -778,19 +782,19 @@ function Footer() {
             <h4 className="mb-4 font-semibold text-neutral-200">Company</h4>
             <ul className="space-y-2">
               <li>
-                <a href="#" className="text-neutral-400 transition-colors hover:text-neutral-200">
+                <span className="text-neutral-400">
                   About
-                </a>
+                </span>
               </li>
               <li>
-                <a href="#" className="text-neutral-400 transition-colors hover:text-neutral-200">
+                <span className="text-neutral-400">
                   Blog
-                </a>
+                </span>
               </li>
               <li>
-                <a href="#" className="text-neutral-400 transition-colors hover:text-neutral-200">
+                <span className="text-neutral-400">
                   Contact
-                </a>
+                </span>
               </li>
             </ul>
           </div>

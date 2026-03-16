@@ -272,14 +272,21 @@ function Card({
   className?: string;
   onClick?: () => void;
 }) {
-  return (
-    <div
-      className={cn("rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] p-6", className)}
-      onClick={onClick}
-    >
-      {children}
-    </div>
+  const classes = cn(
+    "rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] p-6",
+    onClick ? "block w-full text-left" : undefined,
+    className
   );
+
+  if (onClick) {
+    return (
+      <button type="button" className={classes} onClick={onClick}>
+        {children}
+      </button>
+    );
+  }
+
+  return <div className={classes}>{children}</div>;
 }
 
 function KPICard({
@@ -634,6 +641,8 @@ function TeamsTab({
   const [createError, setCreateError] = useState<string | null>(null);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [teamAdmins, setTeamAdmins] = useState<TeamAdmin[]>([]);
+  const [teamPolicies, setTeamPolicies] = useState<PolicyRow[]>([]);
+  const [teamModels, setTeamModels] = useState<string[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [memberName, setMemberName] = useState("");
@@ -669,7 +678,7 @@ function TeamsTab({
       setDetailLoading(true);
       setDetailError(null);
       try {
-        const [membersRes, adminsRes] = await Promise.all([
+        const [membersRes, adminsRes, policiesRes, modelsRes] = await Promise.all([
           getJSON<
             ListResponse<{
               user_id: string;
@@ -693,6 +702,12 @@ function TeamsTab({
             }>
           >(
             `/v1/control/orgs/${encodeURIComponent(orgID)}/teams/${encodeURIComponent(teamID)}/admins?limit=200`
+          ),
+          getJSON<ListResponse<PolicyRow>>(
+            `/v1/control/orgs/${encodeURIComponent(orgID)}/teams/${encodeURIComponent(teamID)}/policies/models`
+          ),
+          getJSON<ListResponse<{ provider: string; model: string }>>(
+            `/v1/control/orgs/${encodeURIComponent(orgID)}/teams/${encodeURIComponent(teamID)}/policies/effective-models?limit=200`
           )
         ]);
 
@@ -716,9 +731,13 @@ function TeamsTab({
             createdAt: new Date(entry.created_at)
           }))
         );
+        setTeamPolicies(toArray(policiesRes.items));
+        setTeamModels(toArray(modelsRes.items).map((entry) => `${entry.provider}/${entry.model}`));
       } catch (err) {
         setTeamMembers([]);
         setTeamAdmins([]);
+        setTeamPolicies([]);
+        setTeamModels([]);
         setDetailError(err instanceof Error ? err.message : "Failed to load team members.");
       } finally {
         setDetailLoading(false);
@@ -731,6 +750,8 @@ function TeamsTab({
     if (!selectedTeam) {
       setTeamMembers([]);
       setTeamAdmins([]);
+      setTeamPolicies([]);
+      setTeamModels([]);
       setDetailError(null);
       setTeamActionError(null);
       setTeamActionMessage(null);
@@ -845,7 +866,7 @@ function TeamsTab({
             </div>
             <div className="rounded-lg bg-[#0a0a0a] p-4">
               <p className="mb-1 text-sm text-[#888]">Policies</p>
-              <p className="text-2xl font-semibold text-white">{selectedTeam.policies.length}</p>
+              <p className="text-2xl font-semibold text-white">{teamPolicies.length || selectedTeam.policies.length}</p>
             </div>
           </div>
 
@@ -915,7 +936,9 @@ function TeamsTab({
           <div>
             <h3 className="mb-3 font-medium text-white">Effective Models</h3>
             <div className="flex flex-wrap gap-2">
-              {selectedTeam.models.length > 0 ? (
+              {teamModels.length > 0 ? (
+                teamModels.map((model) => <Badge key={model}>{model}</Badge>)
+              ) : selectedTeam.models.length > 0 ? (
                 selectedTeam.models.map((model) => <Badge key={model}>{model}</Badge>)
               ) : (
                 <span className="text-sm text-[#666]">No effective models.</span>
@@ -1280,19 +1303,7 @@ function ModelsTab({
   const [providerAPIKey, setProviderAPIKey] = useState("");
   const [providerKekID, setProviderKekID] = useState("kek-v1");
   const [orgPolicyJSON, setOrgPolicyJSON] = useState("[]");
-  const [teamPolicyJSON, setTeamPolicyJSON] = useState(
-    JSON.stringify(
-      [
-        {
-          provider: "openai",
-          model: "gpt-4o",
-          is_allowed: false
-        }
-      ],
-      null,
-      2
-    )
-  );
+  const [teamPolicyJSON, setTeamPolicyJSON] = useState("");
   const [policyTeamID, setPolicyTeamID] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -1304,8 +1315,37 @@ function ModelsTab({
   useEffect(() => {
     if (!policyTeamID && teams.length > 0) {
       setPolicyTeamID(teams[0].id);
+      return;
     }
-  }, [policyTeamID, teams]);
+
+    if (!policyTeamID || !orgID) {
+      setTeamPolicyJSON("");
+      return;
+    }
+
+    let cancelled = false;
+    const loadTeamPolicies = async () => {
+      try {
+        const teamPoliciesRes = await getJSON<ListResponse<PolicyRow>>(
+          `/v1/control/orgs/${encodeURIComponent(orgID)}/teams/${encodeURIComponent(policyTeamID)}/policies/models`
+        );
+        if (cancelled) {
+          return;
+        }
+        setTeamPolicyJSON(JSON.stringify(toArray(teamPoliciesRes.items), null, 2));
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        setTeamPolicyJSON("[]");
+      }
+    };
+    void loadTeamPolicies();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [orgID, policyTeamID, teams]);
 
   const submitProviderKey = async () => {
     if (!orgID) {
@@ -1356,6 +1396,10 @@ function ModelsTab({
     }
     if (!policyTeamID) {
       setActionError("Select a team first.");
+      return;
+    }
+    if (!teamPolicyJSON.trim()) {
+      setActionError("Team policy JSON is empty.");
       return;
     }
     let entries: PolicyRow[];
@@ -1749,7 +1793,7 @@ function EventsTab({ role, events, loading, error }: { role: Role; events: Event
   );
 }
 
-export function BaseConsole({ initialRole = "org_owner" }: { initialRole?: Role }) {
+export function BaseConsole() {
   const [activeTab, setActiveTab] = useState("overview");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -1780,7 +1824,7 @@ export function BaseConsole({ initialRole = "org_owner" }: { initialRole?: Role 
   const [dateRange, setDateRange] = useState("7d");
   const [bucket, setBucket] = useState("day");
 
-  const role: Role = session?.role ?? initialRole;
+  const role: Role = session?.role ?? "member";
 
   const refreshSession = useCallback(async () => {
     try {
@@ -1820,47 +1864,14 @@ export function BaseConsole({ initialRole = "org_owner" }: { initialRole?: Role 
       const teamsRes = await getJSON<ListResponse<TeamListItem>>(`/v1/control/orgs/${orgID}/teams?limit=200`);
       const teamRows = toArray(teamsRes.items);
 
-      const resolvedTeams = await Promise.all(
-        teamRows.map(async (team) => {
-          const [membersRes, adminsRes, policiesRes, effectiveRes] = await Promise.allSettled([
-            getJSON<ListResponse<Record<string, unknown>>>(
-              `/v1/control/orgs/${orgID}/teams/${encodeURIComponent(team.id)}/members?limit=200`
-            ),
-            getJSON<ListResponse<Record<string, unknown>>>(
-              `/v1/control/orgs/${orgID}/teams/${encodeURIComponent(team.id)}/admins?limit=200`
-            ),
-            getJSON<ListResponse<PolicyRow>>(
-              `/v1/control/orgs/${orgID}/teams/${encodeURIComponent(team.id)}/policies/models`
-            ),
-            getJSON<ListResponse<{ provider: string; model: string }>>(
-              `/v1/control/orgs/${orgID}/teams/${encodeURIComponent(team.id)}/policies/effective-models?limit=200`
-            )
-          ]);
-
-          const memberCount =
-            membersRes.status === "fulfilled" ? toArray(membersRes.value.items).length : 0;
-          const adminCount = adminsRes.status === "fulfilled" ? toArray(adminsRes.value.items).length : 0;
-          const policies =
-            policiesRes.status === "fulfilled"
-              ? toArray(policiesRes.value.items).map(
-                  (entry) => `${entry.provider}/${entry.model}${entry.is_allowed ? "" : " (deny)"}`
-                )
-              : [];
-          const models =
-            effectiveRes.status === "fulfilled"
-              ? toArray(effectiveRes.value.items).map((entry) => `${entry.provider}/${entry.model}`)
-              : [];
-
-          return {
-            id: team.id,
-            name: team.name,
-            memberCount,
-            adminCount,
-            policies,
-            models
-          };
-        })
-      );
+      const resolvedTeams = teamRows.map((team) => ({
+        id: team.id,
+        name: team.name,
+        memberCount: 0,
+        adminCount: 0,
+        policies: [],
+        models: []
+      }));
       setTeams(resolvedTeams);
 
       const orgPoliciesRes = await getJSON<ListResponse<PolicyRow>>(

@@ -1,3 +1,5 @@
-.env
+.env*
+!.env.example
+!.env.template
 control_magic_links.txt
 frontend/.next.bak.*/
