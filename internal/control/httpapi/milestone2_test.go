@@ -239,6 +239,79 @@ func TestMagicLinkRequestLocalizesLoginToOrgMembership(t *testing.T) {
 	}
 }
 
+func TestMagicLinkRequestRespectsRequestedOrgID(t *testing.T) {
+	tc := newTestHandler(t)
+	h := tc.handler
+	queries := dbquery.New(tc.db)
+
+	_, _, _ = signupAndAuthenticateOwner(t, tc)
+
+	orgBSignup := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs", map[string]any{
+		"org_name":    "other-org",
+		"owner_email": "other-owner@example.com",
+		"owner_name":  "Other Owner",
+	}, "")
+	requireStatus(t, orgBSignup, http.StatusCreated)
+	var orgBBody map[string]any
+	decodeJSON(t, orgBSignup, &orgBBody)
+	orgBID, _ := orgBBody["org_id"].(string)
+	if orgBID == "" {
+		t.Fatalf("expected org B id in signup response, got %#v", orgBBody)
+	}
+
+	otherLoginReq := performJSONRequest(t, h, http.MethodPost, "/v1/control/auth/magic-link/request", map[string]any{
+		"email": "other-owner@example.com",
+	}, "")
+	requireStatus(t, otherLoginReq, http.StatusOK)
+	var otherLoginBody map[string]any
+	decodeJSON(t, otherLoginReq, &otherLoginBody)
+	otherMagicLinkID, _ := otherLoginBody["magic_link_id"].(string)
+	if otherMagicLinkID == "" {
+		t.Fatalf("expected other owner magic_link_id, got %#v", otherLoginBody)
+	}
+
+	otherExchange := performJSONRequest(t, h, http.MethodPost, "/v1/control/auth/magic-link/exchange", map[string]any{
+		"magic_link_id": otherMagicLinkID,
+		"code":          mustMagicCode(t, tc, otherMagicLinkID),
+	}, "")
+	requireStatus(t, otherExchange, http.StatusOK)
+	otherOwnerCookie := otherExchange.Header().Get("Set-Cookie")
+	if otherOwnerCookie == "" {
+		t.Fatal("expected other owner auth cookie")
+	}
+
+	orgBTeamID := createTeam(t, h, orgBID, otherOwnerCookie, "other-team")
+	memberAdd := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs/"+orgBID+"/teams/"+orgBTeamID+"/members", map[string]any{
+		"email": "owner@example.com",
+		"name":  "Cross Org Member",
+		"role":  roleMember,
+	}, otherOwnerCookie)
+	requireStatus(t, memberAdd, http.StatusCreated)
+
+	requestRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/auth/magic-link/request", map[string]any{
+		"org_id": orgBID,
+		"email":  "owner@example.com",
+	}, "")
+	requireStatus(t, requestRec, http.StatusOK)
+	var requestBody map[string]any
+	decodeJSON(t, requestRec, &requestBody)
+	magicLinkID, _ := requestBody["magic_link_id"].(string)
+	if magicLinkID == "" {
+		t.Fatalf("expected owner magic_link_id in response, got %#v", requestBody)
+	}
+
+	loginContext, err := queries.GetAuthLoginByMagicLinkID(t.Context(), magicLinkID)
+	if err != nil {
+		t.Fatalf("expected auth login context row: %v", err)
+	}
+	if loginContext.OrgID != orgBID {
+		t.Fatalf("expected localized login org %q, got %q", orgBID, loginContext.OrgID)
+	}
+	if loginContext.Role != roleMember {
+		t.Fatalf("expected localized role %q, got %q", roleMember, loginContext.Role)
+	}
+}
+
 func signupAndAuthenticateOwner(t *testing.T, tc *testControlHandler) (orgID string, ownerUserID string, authCookie string) {
 	t.Helper()
 	h := tc.handler

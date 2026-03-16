@@ -2,13 +2,17 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/smtp"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,6 +35,8 @@ type MagicLinkSender interface {
 type noopMagicLinkSender struct{}
 
 func (noopMagicLinkSender) SendMagicLink(_ context.Context, _ MagicLinkMessage) error { return nil }
+func (noopMagicLinkSender) DeliveryMode() string                                      { return "noop" }
+func (noopMagicLinkSender) ExposeMagicLinkCode() bool                                 { return true }
 
 type smtpMagicLinkSender struct {
 	host    string
@@ -38,6 +44,49 @@ type smtpMagicLinkSender struct {
 	from    string
 	baseURL string
 	auth    smtp.Auth
+}
+
+type fileMagicLinkSender struct {
+	path    string
+	baseURL string
+	mu      sync.Mutex
+}
+
+type magicLinkDeliveryDescriber interface {
+	DeliveryMode() string
+}
+
+type magicLinkCodeExposer interface {
+	ExposeMagicLinkCode() bool
+}
+
+func magicLinkDelivery(sender MagicLinkSender) string {
+	if describer, ok := sender.(magicLinkDeliveryDescriber); ok {
+		return describer.DeliveryMode()
+	}
+	return "custom"
+}
+
+func shouldExposeMagicLinkCode(sender MagicLinkSender) bool {
+	exposer, ok := sender.(magicLinkCodeExposer)
+	return ok && exposer.ExposeMagicLinkCode()
+}
+
+func newMagicLinkSenderFromEnv() (MagicLinkSender, error) {
+	if strings.TrimSpace(os.Getenv("CONTROL_SMTP_HOST")) != "" {
+		return newSMTPMagicLinkSenderFromEnv()
+	}
+
+	path := strings.TrimSpace(os.Getenv("CONTROL_MAGIC_LINK_LOG_PATH"))
+	if path == "" {
+		path = "control_magic_links.txt"
+	}
+	log.Printf("WARN: Using file-based magic link delivery to %s - not recommended for production", path)
+
+	return &fileMagicLinkSender{
+		path:    path,
+		baseURL: strings.TrimSpace(os.Getenv("CONTROL_MAGIC_LINK_BASE_URL")),
+	}, nil
 }
 
 func newSMTPMagicLinkSenderFromEnv() (MagicLinkSender, error) {
@@ -79,6 +128,9 @@ func newSMTPMagicLinkSenderFromEnv() (MagicLinkSender, error) {
 		auth:    auth,
 	}, nil
 }
+
+func (s *smtpMagicLinkSender) DeliveryMode() string      { return "smtp" }
+func (s *smtpMagicLinkSender) ExposeMagicLinkCode() bool { return false }
 
 func (s *smtpMagicLinkSender) SendMagicLink(ctx context.Context, msg MagicLinkMessage) error {
 	if err := ctx.Err(); err != nil {
@@ -122,6 +174,66 @@ func (s *smtpMagicLinkSender) SendMagicLink(ctx context.Context, msg MagicLinkMe
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	if err := smtp.SendMail(addr, s.auth, s.from, []string{msg.ToEmail}, []byte(message)); err != nil {
 		return fmt.Errorf("send smtp mail: %w", err)
+	}
+	return nil
+}
+
+func (s *fileMagicLinkSender) DeliveryMode() string      { return "file" }
+func (s *fileMagicLinkSender) ExposeMagicLinkCode() bool { return true }
+
+func (s *fileMagicLinkSender) SendMagicLink(ctx context.Context, msg MagicLinkMessage) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	link := ""
+	if s.baseURL != "" {
+		u, err := url.Parse(s.baseURL)
+		if err != nil {
+			return fmt.Errorf("parse CONTROL_MAGIC_LINK_BASE_URL: %w", err)
+		}
+		q := u.Query()
+		q.Set("magic_link_id", msg.MagicLinkID)
+		q.Set("code", msg.Code)
+		u.RawQuery = q.Encode()
+		link = u.String()
+	}
+
+	entry := map[string]string{
+		"timestamp":     time.Now().UTC().Format(time.RFC3339),
+		"to":            msg.ToEmail,
+		"magic_link_id": msg.MagicLinkID,
+		"code":          msg.Code,
+		"org_id":        msg.OrgID,
+		"user_id":       msg.UserID,
+		"role":          msg.Role,
+		"expires_at":    msg.ExpiresAt.UTC().Format(time.RFC3339),
+	}
+	if link != "" {
+		entry["link"] = link
+	}
+	record, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal magic link log entry: %w", err)
+	}
+
+	if dir := filepath.Dir(s.path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create magic link log dir: %w", err)
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	file, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("open magic link log file: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(string(record) + "\n"); err != nil {
+		return fmt.Errorf("write magic link log file: %w", err)
 	}
 	return nil
 }

@@ -13,14 +13,14 @@ import (
 )
 
 func TestVisibilityEndpoints(t *testing.T) {
-	tc := newTestHandler(t)
-	h := tc.handler
-	queries := dbquery.New(tc.db)
+		tc := newTestHandler(t)
+		h := tc.handler
+		queries := dbquery.New(tc.db)
 
-	orgID, ownerUserID, ownerCookie := signupAndAuthenticateOwner(t, h)
-	teamID := createTeam(t, h, orgID, ownerCookie, "vis-team")
-	memberUserID := addMemberByEmail(t, h, orgID, teamID, ownerCookie, "vis-member@example.com", "Visibility Member", "")
-	adminUserID := addMemberByEmail(t, h, orgID, teamID, ownerCookie, "vis-admin@example.com", "Visibility Admin", roleTeamAdmin)
+		orgID, ownerUserID, ownerCookie := signupAndAuthenticateOwner(t, tc)
+		teamID := createTeam(t, h, orgID, ownerCookie, "vis-team")
+		memberUserID := addMemberByEmail(t, h, orgID, teamID, ownerCookie, "vis-member@example.com", "Visibility Member", "")
+		adminUserID := addMemberByEmail(t, h, orgID, teamID, ownerCookie, "vis-admin@example.com", "Visibility Admin", roleTeamAdmin)
 
 	scopeRec := performJSONRequest(t, h, http.MethodPost, "/v1/control/orgs/"+orgID+"/teams/"+teamID+"/admins/"+adminUserID, map[string]any{}, ownerCookie)
 	requireStatus(t, scopeRec, http.StatusCreated)

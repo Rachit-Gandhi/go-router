@@ -38,10 +38,15 @@ func (h *controlHandler) handleGetSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	role := claims.Role
+	if role == "" {
+		role = membership.Role
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"org_id":     claims.OrgID,
 		"user_id":    claims.UserID,
-		"role":       membership.Role,
+		"role":       role,
 		"expires_at": time.Unix(claims.ExpiresAtUnix, 0).UTC().Format(time.RFC3339),
 	})
 }
